@@ -560,6 +560,8 @@ def main(argv: list[str] | None = None) -> int:
                 gap_report = (gf.coverage, gf.rounds)
         if gap_report is None:
             gap_report = (coverage(dossier, opts), [])
+        if summary := r.search_summary():
+            log(summary)
         review_inputs = (sources, used, r.skipped)
         source_urls = [s.url for s in used]
         out_early = Path(args.out) / slugify(opts.name)

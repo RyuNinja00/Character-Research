@@ -252,6 +252,7 @@ def serve(handler) -> tuple[HTTPServer, str]:
 
 
 ORIG_FETCH = Researcher.fetch
+ORIG_SEARCH = Researcher.search
 
 
 class FakeWeb(BaseHTTPRequestHandler):
@@ -629,6 +630,48 @@ def main():
             rb._browser.close()
         roff = R3(cache=None, search_provider="none", confirm_adult=True, browser_mode="off")
         check(roff.fetch(web_url + "/jsonly", kind="user") is None, "browser off: JavaScript-only page reported, not read")
+
+        # ── Web search: safe search off for adult runs, "No results" is not a failure, simpler retry, rate limits
+        import types
+        import persona_forge.research as rmod
+        calls = []
+
+        class FakeDDGS:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def text(self, query, region=None, safesearch=None, max_results=10):
+                calls.append((query, safesearch))
+                if "ratelimited" in query and sum(1 for q, _ in calls if "ratelimited" in q) == 1:
+                    raise Exception("https://html.duckduckgo.com/html 202 Ratelimit")
+                if " OR " in query or "(" in query:
+                    raise Exception("No results found.")
+                return [{"href": "https://example.org/" + query.replace(" ", "_").replace('"', ""), "title": "t"}]
+
+        saved = sys.modules.get("ddgs")
+        sys.modules["ddgs"] = types.SimpleNamespace(DDGS=FakeDDGS)
+        real_sleep = rmod.time.sleep
+        rmod.time.sleep = lambda s: None
+        stubbed_search = R3.search
+        R3.search = ORIG_SEARCH
+        try:
+            rs = R3(cache=None, search_provider="ddg", confirm_adult=True)
+            got = rs.search('"Nova Test" personality OR character OR temperament')
+            check(got and calls[-1] == ('"Nova Test" personality', "off"),
+                  "empty complex search retried in a simpler form, with safe search off")
+            check(rs.search_stats["failed"] == 0 and rs.search_stats["empty"] == 0,
+                  "“No results found” is not reported as a failure")
+            check(rs.search("ratelimited query") and rs.search_stats["rate_limited"] == 1, "rate limit → wait and retry")
+            rs2 = R3(cache=None, search_provider="ddg", confirm_adult=False)
+            rs2.search("cats")
+            check(calls[-1][1] == "moderate", "safe search stays moderate for non-adult runs")
+            check("Web search (ddg, safe search off)" in rs.search_summary(), "one-line search summary instead of spam")
+        finally:
+            R3.search = stubbed_search
+            rmod.time.sleep = real_sleep
+            if saved is not None:
+                sys.modules["ddgs"] = saved
+            else:
+                del sys.modules["ddgs"]
 
         # ── A page-reading model the provider doesn't know falls back to the main model
         fb = io.StringIO()

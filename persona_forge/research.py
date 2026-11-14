@@ -100,6 +100,18 @@ BLOCKED_TIP = ("open it in your browser, save it (Ctrl+S / Cmd+S → “Webpage,
                "and add it under Text sources / --file")
 
 
+def simpler_queries(query: str) -> list[str]:
+    """Simpler forms of a query for a retry: first alternative of each OR-list, then without quotes."""
+    q = re.sub(r"\(([^()]*)\)", lambda m: m.group(1).split(" OR ")[0], query)  # (a OR b) → a
+    q = re.sub(r"(\S+)(?: OR \S+)+", r"\1", q)                                   # a OR b OR c → a
+    q = " ".join(q.split())
+    out = [q] if q != query else []
+    unquoted = q.replace('"', "")
+    if unquoted != q:
+        out.append(unquoted)
+    return out
+
+
 def normalize_url(url: str) -> str:
     """Tidy a pasted link: add https://, drop tracking parameters (?si=, utm_…), expand YouTube short links."""
     from urllib.parse import parse_qsl, urlencode, urlunparse
@@ -216,6 +228,11 @@ class Researcher:
         self._browser_failed = False
         self._browser_lock = threading.Lock()
         self._last_hit: dict[str, float] = {}
+        # Adult runs need safe search off, or the engines hide exactly the sites being researched.
+        self.safesearch = "off" if confirm_adult else "moderate"
+        self.search_stats = {"queries": 0, "empty": 0, "failed": 0, "rate_limited": 0, "retried": 0}
+        self._search_lock = threading.Lock()
+        self._last_search = 0.0
         self._pace_lock = threading.Lock()
         import os
 
@@ -327,8 +344,9 @@ class Researcher:
 
     # ───────────────────────────────────────────── Web search
     def search(self, query: str, max_results: int = 8) -> list[tuple[str, str]]:
-        """Returns [(url, title)]."""
-        cache_key = f"{self.search_provider}|{query}|{max_results}"
+        """Returns [(url, title)]. An empty result is retried once in a simpler form; empties are counted
+        (see search_summary) instead of being reported one by one."""
+        cache_key = f"{self.search_provider}|{self.safesearch}|{query}|{max_results}"
         if self.cache and (hit := self.cache.get("search", cache_key)) is not None:
             return [tuple(x) for x in hit]
         provider = self.search_provider
@@ -344,36 +362,90 @@ class Researcher:
         fn = getattr(self, f"_search_{provider}", None)
         if fn is None:
             raise ValueError(f"Unknown search provider: {provider}")
-        try:
-            results = fn(query, max_results)
-        except Exception as e:  # noqa: BLE001 – a search failure shouldn't kill the run
-            log(f"  ! search failed ({provider}): {e}")
-            results = []
+        self._provider_used = provider
+        results: list[tuple[str, str]] = []
+        for attempt, q in enumerate(dict.fromkeys([query, *simpler_queries(query)])):
+            if attempt > 1:
+                break
+            if attempt:
+                self.search_stats["retried"] += 1
+            results = self._run_search(fn, provider, q, max_results)
+            if results:
+                break
+        self.search_stats["queries"] += 1
+        if not results:
+            self.search_stats["empty"] += 1
+            debug(f"no results: {query}")
         if self.cache and results:
             self.cache.set("search", cache_key, results)
         return results
+
+    def _run_search(self, fn, provider: str, query: str, n: int) -> list[tuple[str, str]]:
+        if provider == "ddg":  # free DuckDuckGo rate-limits bursts: keep searches a little apart
+            with self._search_lock:
+                wait = self._last_search + 1.2 - time.time()
+                if wait > 0:
+                    time.sleep(wait)
+                self._last_search = time.time()
+        for attempt in range(2):
+            try:
+                return fn(query, n)
+            except Exception as e:  # noqa: BLE001 – a search failure shouldn't kill the run
+                msg = str(e).lower()
+                if "no result" in msg:
+                    return []  # an empty search, not a failure
+                if ("ratelimit" in msg or "rate limit" in msg or "202" in msg or "429" in msg
+                        or e.__class__.__name__.lower().startswith("ratelimit")):
+                    self.search_stats["rate_limited"] += 1
+                    if attempt == 0:
+                        time.sleep(6)
+                        continue
+                    log(f"  ! search is being rate-limited ({provider}) – slowing down")
+                    time.sleep(10)
+                    return []
+                self.search_stats["failed"] += 1
+                log(f"  ! search failed ({provider}): {e}")
+                return []
+        return []
+
+    def search_summary(self) -> str:
+        st = self.search_stats
+        if not st["queries"]:
+            return ""
+        line = (f"→ Web search ({getattr(self, '_provider_used', self.search_provider)}, safe search "
+                f"{self.safesearch}): {st['queries']} searches, {st['queries'] - st['empty']} with results")
+        if st["rate_limited"]:
+            line += f", rate-limited {st['rate_limited']}×"
+        if st["failed"]:
+            line += f", {st['failed']} failed"
+        if getattr(self, "_provider_used", "") == "ddg" and st["empty"] >= max(3, st["queries"] // 2):
+            line += ("\n  i Free DuckDuckGo search found little for this name. A Tavily or Brave API key in .env "
+                     "(TAVILY_API_KEY / BRAVE_API_KEY) usually finds much more – or add pages directly.")
+        return line
 
     def _search_ddg(self, query: str, n: int) -> list[tuple[str, str]]:
         try:  # prefer the maintained library if installed
             from ddgs import DDGS  # type: ignore
 
             with DDGS() as ddgs:
-                return [(r["href"], r.get("title", "")) for r in ddgs.text(query, max_results=n)]
+                return [(r["href"], r.get("title", "")) for r in
+                        ddgs.text(query, region="us-en", safesearch=self.safesearch, max_results=n) or []]
         except ImportError:
             pass
         try:
             from duckduckgo_search import DDGS  # type: ignore
 
             with DDGS() as ddgs:
-                return [(r["href"], r.get("title", "")) for r in ddgs.text(query, max_results=n)]
+                return [(r["href"], r.get("title", "")) for r in
+                        ddgs.text(query, region="us-en", safesearch=self.safesearch, max_results=n) or []]
         except ImportError:
             pass
-        # Fallback: DuckDuckGo's HTML endpoint
+        # Fallback: DuckDuckGo's HTML endpoint (kp: -2 = safe search off, -1 = moderate)
         from bs4 import BeautifulSoup
 
         resp = self.http.post(
             "https://html.duckduckgo.com/html/",
-            data={"q": query},
+            data={"q": query, "kl": "us-en", "kp": "-2" if self.safesearch == "off" else "-1"},
             headers={"User-Agent": BROWSER_UA},
             timeout=self.timeout,
         )
@@ -388,13 +460,12 @@ class Researcher:
                 out.append((href, a.get_text(" ", strip=True)))
             if len(out) >= n:
                 break
-        time.sleep(1.0)  # be polite to the HTML endpoint
         return out
 
     def _search_searxng(self, query: str, n: int) -> list[tuple[str, str]]:
         resp = self.http.get(
             self.searxng_url.rstrip("/") + "/search",
-            params={"q": query, "format": "json"},
+            params={"q": query, "format": "json", "safesearch": "0" if self.safesearch == "off" else "1"},
             timeout=self.timeout,
         )
         resp.raise_for_status()
@@ -403,7 +474,7 @@ class Researcher:
     def _search_brave(self, query: str, n: int) -> list[tuple[str, str]]:
         resp = self.http.get(
             "https://api.search.brave.com/res/v1/web/search",
-            params={"q": query, "count": n},
+            params={"q": query, "count": n, "safesearch": "off" if self.safesearch == "off" else "moderate"},
             headers={"X-Subscription-Token": self.brave_key, "Accept": "application/json"},
             timeout=self.timeout,
         )
@@ -744,6 +815,15 @@ class Researcher:
                 picked.append((url, title))
             if len(picked) >= max_pages:
                 break
+        if not picked:  # some engines ignore batched site: searches – plain searches catch most profiles
+            for plat in ("onlyfans", "fansly", "manyvids", "pornhub model", "clips4sale", "chaturbate"):
+                for url, title in self.search(f"{terms[0]} {plat}", max_results=8):
+                    u = url.split("#")[0].rstrip("/")
+                    if u not in seen and self.is_creator_profile(u, handles):
+                        seen.add(u)
+                        picked.append((url, title))
+                if len(picked) >= max_pages:
+                    break
         if picked:
             log(f"→ Adult-platform profiles found: {len(picked)}")
         return self.fetch_many(picked[:max_pages], kind="platform")

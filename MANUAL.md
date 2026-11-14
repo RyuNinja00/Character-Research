@@ -703,7 +703,8 @@ Run `python -m persona_forge --help` for the full list. These are the main optio
 | YouTube link gives little | Only a video's title and description can be read, not what's said. On YouTube click **… → Show transcript**, copy it into a `.txt` and add it under **Text sources**. |
 | A run still skips a page after you fixed it | Failed pages aren't cached, so just run again. |
 | Lots of `almost no readable text` | Social and fan sites hide content behind logins. Paste the text you need (bio, captions, FAQ) into a file and add it with `--file`. |
-| `search failed` / few web pages | The free search is rate-limiting you. Wait a few minutes, lower `--max-rounds`, or set `TAVILY_API_KEY` or `BRAVE_API_KEY`. |
+| `search failed (ddg): No results found` (older versions) / few web pages | Fixed: adult runs now search with **safe search off** (DuckDuckGo's default, "moderate", hid adult sites), an empty search is retried once in a simpler form, and empties are no longer reported as failures. The run prints one summary line, e.g. `Web search (ddg, safe search off): 18 searches, 11 with results`. If free search still finds little, add `TAVILY_API_KEY` or `BRAVE_API_KEY` to `.env` (much better results), or add pages yourself under **Extra pages**. |
+| `search is being rate-limited` | DuckDuckGo is throttling the free search. The app waits and slows down automatically. Fewer `--max-rounds`, or a Tavily/Brave key, avoids it. |
 | Wrong person's facts | Use a more specific `--descriptor`, add `--handle`, and delete the wrong facts from `dossier.json`, then rebuild. |
 | `Push failed … 401` | Set `MARINARA_USER` and `MARINARA_PASS` in `.env`. |
 | `Push failed … 403` | Marinara rejected the request. Run the app on the same computer as Marinara, or import the PNG by hand. |
