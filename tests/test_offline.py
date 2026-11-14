@@ -251,6 +251,32 @@ class FakeWeb(BaseHTTPRequestHandler):
 
     def do_GET(self):
         b = FakeWeb.base
+        if self.path.startswith("/picky"):  # firewall: needs normal browser headers
+            ok = "Accept-Language" in self.headers and "text/html" in (self.headers.get("Accept") or "")
+            body = ("<html><body><article><p>" + "Picky Nova Test interview text. " * 30 + "</p></article></body></html>"
+                    if ok else "blocked")
+            self.send_response(200 if ok else 404)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body.encode())
+            return
+        if self.path.startswith("/flaky"):  # fails the first time only
+            FakeWeb.flaky_hits = getattr(FakeWeb, "flaky_hits", 0) + 1
+            ok = FakeWeb.flaky_hits > 1
+            self.send_response(200 if ok else 503)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write((("<html><body><article><p>" + "Flaky Nova Test page. " * 30 + "</p></article></body></html>")
+                              if ok else "down").encode())
+            return
+        if self.path.startswith("/magazine/interview"):
+            body = ("<html><body><article><p>" + "Magazine interview with Nova Test. " * 30 +
+                    f'</p><a href="{b}/magazine/about-other-star">About another star</a></article></body></html>')
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body.encode())
+            return
         pages = {
             "/hub": f"""<html><head><title>Ivy | Links</title>
 <meta property="og:description" content="Ivy Example - creator, gamer, cosplayer"></head><body>
@@ -290,7 +316,7 @@ def stub_research():
     Researcher.search = lambda self, q, max_results=8: [
         ("https://example.org/ada-bio", "Bio"), ("https://facebook.com/ada", "FB"), ("https://example.org/x.pdf", "pdf"),
     ]
-    Researcher.fetch = lambda self, url, title="", kind="web", keep_html=False: Source(url, title, "Lovelace " * 300, kind)
+    Researcher.fetch = lambda self, url, title="", kind="web", keep_html=False, via="": Source(url, title, "Lovelace " * 300, kind)
 
 
 def check(cond, msg):
@@ -479,7 +505,7 @@ def main():
         queries_made = []
         rr.search = lambda q, max_results=5: queries_made.append(q) or (cands if "manyvids" in q else [])
         fetched = []
-        rr.fetch = lambda url, title="", kind="web", keep_html=False: fetched.append((url, kind)) or Source(url, title, "x" * 500, kind)
+        rr.fetch = lambda url, title="", kind="web", keep_html=False, via="": fetched.append((url, kind)) or Source(url, title, "x" * 500, kind)
         rr.adult_platform_sweep("Nova Test", hs, set())
         urls = [u for u, _ in fetched]
         check("https://www.manyvids.com/Profile/123/novatest/Store/Videos" in urls and
@@ -504,6 +530,25 @@ def main():
             raise AssertionError("audience research without --talent should exit")
         except SystemExit as e:
             check("--talent" in str(e), "--audience-research requires --talent")
+        # ── Page reader: browser headers, retry, no failure caching, no sub-pages on third-party sites
+        from persona_forge.research import Researcher as R2, normalize_url
+        from persona_forge.util import DiskCache
+        cache_dir = Path(tmp) / "cache_reader"
+        rd = R2(cache=DiskCache(cache_dir), search_provider="none")
+        rd.handles = ["novatest"]
+        check(rd.fetch(web_url + "/picky", kind="user") is not None, "site that 404s scripted requests is read")
+        check(rd.fetch(web_url + "/flaky", kind="user") is not None, "temporary 503 retried and read")
+        FakeWeb.flaky_hits = 0
+        miss = rd.fetch(web_url + "/does-not-exist", kind="user")
+        check(miss is None and any("HTTP 404" in why and "Text sources" in why for _, why in rd.skipped),
+              "404 explained with what to do next")
+        check(not list((cache_dir / "page").glob("*.json")) or all(json.loads(f.read_text()) for f in (cache_dir / "page").glob("*.json")),
+              "failed pages are not cached")
+        mag = rd.fetch(web_url + "/magazine/interview", kind="user", keep_html=True)
+        check(not rd.follow_site_pages([mag], per_site=5), "no sub-pages followed on a third-party interview site")
+        check(normalize_url("https://youtu.be/b_GvjCMoPds?si") == "https://www.youtube.com/watch?v=b_GvjCMoPds",
+              "YouTube share link normalised, tracking tag dropped")
+
         # ── Images: image prompt, creator-supplied sprites, generated avatar
         sp = Path(tmp) / "sprites"
         (sp / "full-body").mkdir(parents=True)

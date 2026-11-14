@@ -646,6 +646,9 @@ Run `python -m persona_forge --help` for the full list. These are the main optio
 | `--talent needs --consent-note` | Add `--consent-note "..."`. |
 | `Only N facts found` | Not enough material. Add `--deep`, more `--url` pages, or a `--file` brief. Check `review.md` to see what was read and skipped. |
 | Link hub reads 0 links | The site blocked the request. Add the hub's important links with `--url` or a `--urls-file`. |
+| `HTTP 404` / `403` / `503` on a link you added | Open the link in your browser. If it **doesn't** load, the link is wrong or the page was removed (old interviews often are). If it **does** load, the site blocks automated readers. The app already retries with normal browser settings, so save the page instead: **Ctrl+S / Cmd+S → "Webpage, HTML only"**, or copy the text into a `.txt`, and add it under **Text sources** (web UI) or with `--file`. |
+| YouTube link gives little | Only a video's title and description can be read, not what's said. On YouTube click **… → Show transcript**, copy it into a `.txt` and add it under **Text sources**. |
+| A run still skips a page after you fixed it | Failed pages aren't cached, so just run again. |
 | Lots of `almost no readable text` | Social and fan sites hide content behind logins. Paste the text you need (bio, captions, FAQ) into a file and add it with `--file`. |
 | `search failed` / few web pages | The free search is rate-limiting you. Wait a few minutes, lower `--max-rounds`, or set `TAVILY_API_KEY` or `BRAVE_API_KEY`. |
 | Wrong person's facts | Use a more specific `--descriptor`, add `--handle`, and delete the wrong facts from `dossier.json`, then rebuild. |

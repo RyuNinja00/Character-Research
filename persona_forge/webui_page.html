@@ -172,7 +172,7 @@
         <div class="field">
           <label for="urls">Extra pages</label>
           <textarea id="urls" name="urls" placeholder="https://example.com/interview-with-ivy&#10;https://podcast.example.com/ep42"></textarea>
-          <div class="hint">One per line: interviews, podcasts, their website, profile or store pages. Saved to <code>urls.txt</code>.</div>
+          <div class="hint">One per line: interviews, podcasts, their website, profile or store pages. Saved to <code>urls.txt</code>. A page that won't load (403/404)? Save it from your browser and add it under <b>Text sources</b>.</div>
         </div>
       </div>
       <div class="field" data-modes="talent fictional">
@@ -242,7 +242,7 @@
           <label>Text sources</label>
           <div class="drop" data-kind="sources"><input type="file" multiple accept=".txt,.md,.json,.html,.htm"></div>
           <div class="chips" id="files-sources"></div>
-          <div class="hint">Transcripts, Q&amp;As, saved captions (.txt .md .json .html). Treated as authoritative.</div>
+          <div class="hint">Transcripts, Q&amp;As, saved web pages (Ctrl+S → “HTML only”), YouTube transcripts (.txt .md .json .html). Treated as authoritative.</div>
         </div>
         <div>
           <div class="check"><input type="checkbox" id="avatar_from_reference" name="avatar_from_reference" checked><div>

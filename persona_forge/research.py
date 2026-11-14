@@ -19,8 +19,55 @@ USER_AGENT = (
 )
 BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
+# A complete, ordinary browser request. Many site firewalls answer bare scripted requests with 403/404/406.
+BROWSER_HEADERS = {
+    "User-Agent": BROWSER_UA,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+}
+ALT_HEADERS = {  # second attempt: a different, equally ordinary browser
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14.6; rv:132.0) Gecko/20100101 Firefox/132.0",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+    "Accept-Encoding": "gzip, deflate",
+    "Referer": "https://www.google.com/",
+}
+TRACKING_PARAMS = re.compile(r"^(si|utm_[a-z]+|fbclid|gclid|igshid|mc_[a-z]+|ref_src|feature|pp)$", re.I)
+STATUS_ADVICE = {
+    403: "the site blocks automated readers",
+    406: "the site blocks automated readers",
+    429: "the site is rate-limiting – try again later",
+    451: "not available in this region",
+    503: "the site blocks automated readers or is down",
+}
+BLOCKED_TIP = ("open it in your browser, save it (Ctrl+S / Cmd+S → “Webpage, HTML only” or copy the text into a .txt) "
+               "and add it under Text sources / --file")
+
+
+def normalize_url(url: str) -> str:
+    """Tidy a pasted link: add https://, drop tracking parameters (?si=, utm_…), expand YouTube short links."""
+    from urllib.parse import parse_qsl, urlencode, urlunparse
+
+    url = url.strip().strip("<>\"'")
+    if url and "://" not in url:
+        url = "https://" + url
+    u = urlparse(url)
+    host = u.netloc.lower().removeprefix("www.").removeprefix("m.")
+    query = [(k, v) for k, v in parse_qsl(u.query, keep_blank_values=True) if not TRACKING_PARAMS.match(k)]
+    path = u.path
+    if host == "youtu.be" and path.strip("/"):
+        return f"https://www.youtube.com/watch?v={path.strip('/').split('/')[0]}"
+    if host == "youtube.com" and path.startswith(("/shorts/", "/live/")):
+        return f"https://www.youtube.com/watch?v={path.split('/')[2]}"
+    return urlunparse((u.scheme, u.netloc, path, u.params, urlencode(query), ""))
 
 # Never read: people-search / records aggregators (doxxing risk), whatever the source of the link.
 PEOPLE_SEARCH_DOMAINS = {
@@ -116,6 +163,7 @@ class Researcher:
         self.http.headers["User-Agent"] = USER_AGENT
         self.skipped: list[tuple[str, str]] = []  # (url, reason) – reported in review.md
         self.discovered_handles: list[str] = []      # usernames seen in the creator's own platform links
+        self.handles: list[str] = []                 # the creator's usernames (set by the CLI)
 
     # ───────────────────────────────────────────── Wikipedia / Wikiquote
     def _wiki_api(self, site: str, params: dict) -> dict:
@@ -336,9 +384,38 @@ class Researcher:
     def _skip(self, url: str, reason: str) -> None:
         self.skipped.append((url, reason))
 
-    def fetch(self, url: str, title: str = "", kind: str = "web", keep_html: bool = False) -> Source | None:
+    def _get(self, url: str, retry: bool) -> requests.Response:
+        resp = self.http.get(url, headers=BROWSER_HEADERS, timeout=self.timeout)
+        if retry and resp.status_code in (403, 404, 406, 429, 503):
+            time.sleep(1.5)
+            alt = url
+            if resp.status_code == 404:  # some servers only know one form of the address
+                path = urlparse(url).path
+                alt = url.replace(path, path[:-1] if path.endswith("/") else path + "/", 1) if path not in ("", "/") else url
+            second = requests.get(alt, headers=ALT_HEADERS, timeout=self.timeout)
+            if second.status_code < 400:
+                return second
+        return resp
+
+    def _youtube(self, url: str) -> str:
+        """Title/channel via YouTube's public oEmbed, plus the page description. Speech isn't available."""
+        bits = []
+        try:
+            o = self.http.get("https://www.youtube.com/oembed", params={"url": url, "format": "json"},
+                              headers=BROWSER_HEADERS, timeout=self.timeout)
+            if o.status_code == 200:
+                j = o.json()
+                bits.append(f"[YouTube video] “{j.get('title', '')}” – channel: {j.get('author_name', '')}")
+        except (requests.RequestException, ValueError):
+            pass
+        return "\n".join(bits)
+
+    def fetch(self, url: str, title: str = "", kind: str = "web", keep_html: bool = False,
+              via: str = "") -> Source | None:
+        url = normalize_url(url)
         user_supplied = kind in ("user", "hub", "platform")
         keep_html = keep_html or kind == "hub"
+        label = f"{url} (sub-page of {via})" if via else url
         if not self.allowed_url(url, user_supplied=user_supplied):
             dom = self._domain(url)
             reason = ("people-search / records site" if self._in(dom, PEOPLE_SEARCH_DOMAINS)
@@ -346,47 +423,65 @@ class Researcher:
                       else "social site found by search (pass it with --url to read it)"
                       if self._in(dom, LOGIN_WALLED_DOMAINS) else "unsupported link")
             self._skip(url, reason)
-            log(f"  ! skipped {url} ({reason})")
+            log(f"  ! skipped {label} ({reason})")
             return None
-        if self.cache and (hit := self.cache.get("page", url)) is not None:
-            if hit and (not keep_html or hit.get("meta", {}).get("html")):
+        if self.cache and (hit := self.cache.get("page", url)):  # failures are never cached
+            if not keep_html or hit.get("meta", {}).get("html"):
                 return Source(**hit)
-            if not hit:
-                return None
         src = None
+        is_youtube = self._domain(url) in ("youtube.com", "m.youtube.com") and "/watch" in url
         try:
-            resp = self.http.get(url, headers={"User-Agent": BROWSER_UA}, timeout=self.timeout)
+            resp = self._get(url, retry=user_supplied)
             ctype = resp.headers.get("content-type", "")
             if resp.status_code < 400 and "html" in ctype:
                 text, page_title = extract_main_text(resp.text, url)
                 meta = extract_meta(resp.text)
-                if user_supplied and meta and meta not in text:
+                if (user_supplied or is_youtube) and meta and meta not in text:
                     text = f"[Profile/meta description] {meta}\n\n{text}"
+                if is_youtube:
+                    yt = self._youtube(url)
+                    text = f"{yt}\n{('[Description] ' + meta) if meta else ''}".strip()
+                    log(f"  i {url}: YouTube – only the title and description can be read. For what is said in the "
+                        "video, paste a transcript (YouTube: … → Show transcript) into a .txt under Text sources.")
                 # Pages you chose are kept even if short (a social bio can be one line).
                 if len(text) > (0 if kind == "hub" else 60 if user_supplied else 400):
                     src = Source(url=url, title=title or page_title or url, text=text[: self.max_page_chars],
                                  kind=kind, meta={"html": resp.text[:400_000]} if keep_html else {})
                 else:
-                    self._skip(url, "almost no readable text (login wall or JS-only) – paste it into a --file")
-                    log(f"  ! {url}: almost no readable text (login wall or JS-only page). "
-                        "Copy the text into a file and pass it with --file instead.")
+                    self._skip(url, "almost no readable text (login wall or JS-only) – " + BLOCKED_TIP)
+                    log(f"  ! {label}: almost no readable text (login wall or JS-only page) – {BLOCKED_TIP}")
+            elif resp.status_code < 400:
+                self._skip(url, f"not a web page ({ctype.split(';')[0] or 'unknown type'})")
+                log(f"  ! {label}: not a web page ({ctype.split(';')[0]}) – skipped")
             else:
-                self._skip(url, f"HTTP {resp.status_code}" + ("" if "html" in ctype or resp.status_code >= 400 else f" ({ctype})"))
-                log(f"  ! {url}: HTTP {resp.status_code} – skipped")
+                code = resp.status_code
+                if code == 404:
+                    why = ("page not found – check the link opens in your browser; if it does, the site is "
+                           "blocking automated readers: " + BLOCKED_TIP)
+                else:
+                    why = f"{STATUS_ADVICE.get(code, 'the site refused the request')} – {BLOCKED_TIP}"
+                self._skip(url, f"HTTP {code}: {why}")
+                log(f"  ! {label}: HTTP {code} – {why}" if not via else f"  · {label}: HTTP {code} (skipped)")
         except requests.RequestException as e:
-            self._skip(url, f"fetch failed ({e.__class__.__name__})")
-            log(f"  ! {url}: fetch failed ({e.__class__.__name__})")
-        if self.cache:
-            cached = dict(src.__dict__) if src else {}
-            self.cache.set("page", url, cached)
+            self._skip(url, f"could not connect ({e.__class__.__name__})")
+            log(f"  ! {label}: could not connect ({e.__class__.__name__})")
+        if self.cache and src:
+            self.cache.set("page", url, dict(src.__dict__))
         return src
 
-    def fetch_many(self, items: Iterable[tuple[str, str]], workers: int = 6, kind: str = "web",
+    def fetch_many(self, items: Iterable[tuple], workers: int = 6, kind: str = "web",
                    keep_html: bool = False) -> list[Source]:
+        """items: (url, title) or (url, title, via)."""
         items = list(items)
         with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-            results = list(pool.map(lambda it: self.fetch(it[0], it[1], kind, keep_html), items))
+            results = list(pool.map(
+                lambda it: self.fetch(it[0], it[1], kind, keep_html, it[2] if len(it) > 2 else ""), items))
         return [r for r in results if r]
+
+    def is_own_site(self, url: str) -> bool:
+        """A domain that carries the creator's handle or name (ivywren.com, ivy-wren.carrd.co…)."""
+        dom = re.sub(r"[^a-z0-9]", "", self._domain(url))
+        return any(len(h) >= 4 and re.sub(r"[^a-z0-9]", "", h) in dom for h in self.handles)
 
     # ───────────────────────────────────────────── Adult-platform profiles (creator's own)
     def is_creator_profile(self, url: str, handles: list[str]) -> bool:
@@ -422,11 +517,14 @@ class Researcher:
         return self.fetch_many(picked[:max_pages], kind="platform")
 
     # ───────────────────────────────────────────── Sub-pages of the creator's own sites
-    def follow_site_pages(self, pages: list[Source], per_site: int = 5) -> list[Source]:
+    def follow_site_pages(self, pages: list[Source], per_site: int = 5, from_hub: bool = False) -> list[Source]:
         """For each fetched page on the creator's own site (not a social platform or link hub), read up to
-        `per_site` more pages on the same site, preferring about/bio/FAQ/interview/blog pages."""
+        `per_site` more pages on the same site, preferring about/bio/FAQ/interview/blog pages.
+        Pages you added yourself only get this when the domain carries the creator's name or handle –
+        an interview on a magazine site must not pull in the magazine's pages about other people."""
         if per_site <= 0:
             return []
+        pages = [p for p in pages if from_hub or self.is_own_site(p.url)]
         seen = {p.url.split("#")[0].rstrip("/") for p in pages}
         targets: list[tuple[str, str]] = []
         done_sites: set[str] = set()
@@ -445,7 +543,7 @@ class Researcher:
             cands.sort(key=lambda c: -c[0])
             for _, u, t in cands[:per_site]:
                 seen.add(u.split("#")[0].rstrip("/"))
-                targets.append((u, t))
+                targets.append((u, t, dom))
         if targets:
             log(f"→ Following {len(targets)} sub-pages on the creator's own sites")
         return self.fetch_many(targets, kind="user")
@@ -485,7 +583,7 @@ class Researcher:
         pages = self.fetch_many([(u, t) for u, t in targets[:max_links] if u not in sub_hubs], kind="user",
                                 keep_html=site_pages > 0)
         out.extend(pages)
-        out.extend(self.follow_site_pages(pages, per_site=site_pages))
+        out.extend(self.follow_site_pages(pages, per_site=site_pages, from_hub=True))
         for p in pages:
             p.meta.pop("html", None)
         if depth > 1:

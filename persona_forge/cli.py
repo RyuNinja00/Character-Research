@@ -224,6 +224,7 @@ def gather_sources(r: Researcher, args) -> tuple[list[Source], str, str]:
         log(f"→ Creator source: {src.title} ({len(src.text):,} chars)")
         sources.append(src)
 
+    r.handles = list(args.handles) + [name.replace(" ", "").lower()]
     for seed in args.seed:
         sources.extend(r.crawl_link_hub(seed, max_links=args.seed_max_links, depth=args.seed_depth,
                                         site_pages=args.site_pages))
@@ -232,6 +233,7 @@ def gather_sources(r: Researcher, args) -> tuple[list[Source], str, str]:
         if new:
             log(f"→ Handles found on the link hub: {', '.join(new)}")
             args.handles.extend(new)
+            r.handles.extend(new)
 
     if not args.no_wikipedia:
         wiki = pick_wikipedia(r, name, args)
@@ -248,7 +250,8 @@ def gather_sources(r: Researcher, args) -> tuple[list[Source], str, str]:
 
     if args.url:
         user_pages = r.fetch_many([(u, "") for u in args.url], kind="user", keep_html=args.site_pages > 0)
-        log(f"→ Loaded {len(user_pages)}/{len(args.url)} pages you supplied")
+        log(f"→ Loaded {len(user_pages)}/{len(args.url)} pages you supplied"
+            + ("" if len(user_pages) == len(args.url) else " – see the ! lines above for why, and how to add the rest"))
         sources.extend(user_pages)
         sources.extend(r.follow_site_pages(user_pages, per_site=args.site_pages))
         for p in user_pages:
