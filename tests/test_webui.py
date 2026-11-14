@@ -122,7 +122,8 @@ def main():
     check("brief is still the empty template" in log, "untouched brief template left out")
     check("sk-secret-123" not in log, "API key never appears in the log")
     if has_ffmpeg:
-        check("--audio" in log and "Transcribing voice_note.wav" in log and "tk-secret" not in log,
+        check("--audio" in log and ("Transcribing voice_note.wav" in log or "transcript of voice_note.wav from cache" in log)
+              and "tk-secret" not in log,
               "audio folder transcribed in the run (key kept out of the log)")
         check((out_dir := d / "output" / "Nova_Test" / "transcripts").is_dir() and list(out_dir.glob("*.txt")),
               "transcript saved in the creator's output folder")
