@@ -250,6 +250,35 @@ The first start creates the `talent/` folder in the project.
 To come back to a creator later, pick them from the drop-down at the top. Their settings, brief, limits,
 links and files load automatically.
 
+### Page reader: reading pages the way you would
+
+The app normally reads pages with a fast reader that downloads the page without running it, like a quick
+"view source". Some pages only show their text after JavaScript runs, and some sites turn away anything that
+isn't a real browser. For those, the app can use a **real browser on your computer**. Set it under
+**Page reader** (section 2) or with `--browser`:
+
+| Option | What it does |
+| --- | --- |
+| **Smart** (default, `auto`) | Fast reader first. If a page **you chose** (your links, the link hub and its links, the creator's own profiles) comes back refused, empty or behind an age page, it's opened in the real browser instead. |
+| **Visible browser** (`visible`) | Like Smart, but the browser window is shown. If a site asks you to **verify you're human** or shows a CAPTCHA, the run pauses (up to 3 minutes) for you to complete it in the window, then continues. |
+| **Always** (`always`) | Every page you chose goes through the real browser. Slower, but best for JavaScript-heavy sites. |
+| **Fast reader only** (`off`) | No browser. |
+
+Setup, once: `pip install playwright`. The app uses your installed **Chrome** or **Edge**. If you have neither,
+also run `python -m playwright install chromium`.
+
+How it behaves:
+
+- **It keeps its own profile** in `.browser_profile/` in the project, so cookies, cookie-banner choices and age
+  confirmations are remembered between runs, like your own browser. Delete the folder to start fresh.
+- **It reads at a human pace,** with a short, varied pause between pages on the same site. Pages on different
+  sites still load in parallel.
+- **It never hides what it is.** It doesn't use CAPTCHA-solving services, disguise browser automation, fake a
+  browser fingerprint or rotate proxies. When a site wants a person, use **Visible browser** and do the check
+  yourself.
+- **Search results are always read with the fast reader.** The browser is only used for pages you chose and the
+  creator's own channels.
+
 ### What happens with empty or odd boxes
 
 - Empty boxes are left out of the run, so the app's defaults apply.
@@ -605,6 +634,7 @@ Run `python -m persona_forge --help` for the full list. These are the main optio
 | `--talent` | Managed-creator mode. Skips Wikipedia and applies the creator-safety rules. Needs `--consent-note`. |
 | `--consent-note "..."` | Who authorised the card. Stored in the card. |
 | `--nsfw` | 18+ card. Adds adult-platform research and content themes. |
+| `--browser auto\|visible\|always\|off` | Page reader: real browser when needed (default), with a visible window so you can complete human checks, for every page you chose, or never. |
 | `--confirm-adult` / `--no-age-click` | Answer simple "Are you 18?" click-through pages (on by default with `--nsfw`), or never answer them. Real ID/face/card verification is never bypassed. |
 | `--boundaries F` | Hard limits, added word for word to the card's system prompt. |
 | `--audience-research` | A separate fan-perception report. Never used in the card. |
@@ -665,6 +695,9 @@ Run `python -m persona_forge --help` for the full list. These are the main optio
 | `Only N facts found` | Not enough material. Add `--deep`, more `--url` pages, or a `--file` brief. Check `review.md` to see what was read and skipped. |
 | Link hub reads 0 links | The site blocked the request. Add the hub's important links with `--url` or a `--urls-file`. |
 | `HTTP 404` / `403` / `503` on a link you added | Open the link in your browser. If it **doesn't** load, the link is wrong or the page was removed (old interviews often are). If it **does** load, the site blocks automated readers. The app already retries with normal browser settings, so save the page instead: **Ctrl+S / Cmd+S → "Webpage, HTML only"**, or copy the text into a `.txt`, and add it under **Text sources** (web UI) or with `--file`. |
+| "the site asked to verify you're human" | Set **Page reader → Visible browser** (or `--browser visible`). A browser window opens when the site asks, so complete the check yourself and the run continues. |
+| "Real-browser reader not available" | Run `pip install playwright`. If you have neither Chrome nor Edge, also run `python -m playwright install chromium`. |
+| A page you chose is "almost no readable text" | It's probably built with JavaScript. The **Smart** page reader opens it in the real browser automatically once Playwright is installed. Or choose **Always**. |
 | "Are you 18?" page instead of content | With **18+ adult card** on (or the **I'm 18+** box ticked in the web UI, which is the default), the app answers simple click-through age pages for you: it sets the usual "verified" cookie, or clicks the site's own "Enter / I am 18" link or button. Use `--confirm-adult` on the command line for non-NSFW runs, or `--no-age-click` to turn it off. |
 | "the site uses real age verification" | The site requires an ID, face or card check (often required by law in some regions). The app never bypasses these. Open the page in your browser, complete the check yourself, save the page (Ctrl+S) and add it under **Text sources**. |
 | YouTube link gives little | Only a video's title and description can be read, not what's said. On YouTube click **… → Show transcript**, copy it into a `.txt` and add it under **Text sources**. |

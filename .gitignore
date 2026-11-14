@@ -4,3 +4,4 @@ __pycache__/
 .persona_forge_cache/
 output/
 talent/
+.browser_profile/

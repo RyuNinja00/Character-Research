@@ -120,6 +120,10 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--confirm-adult", action="store_true",
                    help="I am 18+: let the page reader answer simple “Are you 18?” click-through pages "
                         "(on by default with --nsfw). Real ID/face/card age verification is never bypassed.")
+    g.add_argument("--browser", choices=["auto", "off", "always", "visible"], default=env("PERSONA_FORGE_BROWSER", "auto"),
+                   help="Real-browser page reader (needs: pip install playwright). auto = only when the fast reader "
+                        "can't get a page you chose; always = every page you chose; visible = like auto but the window "
+                        "is shown so you can complete “verify you're human” checks yourself; off = fast reader only")
     g.add_argument("--no-age-click", action="store_true",
                    help="Never answer “Are you 18?” pages, even with --nsfw")
     g.add_argument("--audience-research", action="store_true",
@@ -529,6 +533,7 @@ def main(argv: list[str] | None = None) -> int:
             brave_key=args.brave_key,
             tavily_key=args.tavily_key,
             confirm_adult=(args.nsfw or args.confirm_adult) and not args.no_age_click,
+            browser_mode=args.browser,
         )
         sources, opts.name, desc = gather_sources(r, args)
         opts.descriptor = desc or opts.descriptor

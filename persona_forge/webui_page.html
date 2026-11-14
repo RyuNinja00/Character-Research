@@ -214,6 +214,16 @@
         <div class="check" data-modes="talent"><input type="checkbox" id="audience_research" name="audience_research"><div>
           <label for="audience_research">Audience report</label>
           <div class="hint">A separate report on what fans say. Never used in the card.</div></div></div>
+        <div class="field">
+          <label for="browser">Page reader</label>
+          <select id="browser" name="browser">
+            <option value="">Smart (default): fast reader, real browser when a page needs it</option>
+            <option value="visible">Visible browser: I'll complete any “verify you're human” checks myself</option>
+            <option value="always">Always the real browser (slower, best for JavaScript-heavy pages)</option>
+            <option value="off">Fast reader only</option>
+          </select>
+          <div class="hint">The real browser reads pages like you do in Chrome. It runs JavaScript, keeps cookies between runs, and reads at a human pace. With <b>Visible browser</b>, a window opens when a site wants a person, and the run waits for you. Needs <code>pip install playwright</code>.</div>
+        </div>
         <div class="check"><input type="checkbox" id="confirm_adult" name="confirm_adult" checked><div>
           <label for="confirm_adult">I'm 18+: answer “Are you 18?” pages</label>
           <div class="hint">Lets the app click “Enter / I am 18” on adult sites for you. Sites that need real ID, face or card verification are never bypassed; save those pages from your browser.</div></div></div>

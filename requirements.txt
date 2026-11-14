@@ -5,3 +5,4 @@ beautifulsoup4>=4.11
 ddgs>=9.0            # better DuckDuckGo search (falls back to DDG's HTML page without it)
 trafilatura>=1.8     # cleaner article text extraction
 pillow>=10.1         # initials on the placeholder avatar; lets --avatar take JPG/WEBP
+playwright>=1.45     # real-browser page reader (also run: python -m playwright install chromium, if you have no Chrome/Edge)

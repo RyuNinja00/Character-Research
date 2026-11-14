@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import random
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -196,6 +198,8 @@ class Researcher:
         tavily_key: str = "",
         timeout: int = 20,
         confirm_adult: bool = False,
+        browser_mode: str = "auto",          # off | auto (when needed) | always | visible (when needed, window shown)
+        profile_dir: str | None = None,
         max_page_chars: int = 60_000,
     ):
         self.cache = cache
@@ -206,6 +210,18 @@ class Researcher:
         self.tavily_key = tavily_key
         self.timeout = timeout
         self.confirm_adult = confirm_adult
+        self.browser_mode = browser_mode
+        self.profile_dir = profile_dir
+        self._browser = None
+        self._browser_failed = False
+        self._browser_lock = threading.Lock()
+        self._last_hit: dict[str, float] = {}
+        self._pace_lock = threading.Lock()
+        import os
+
+        pace = os.environ.get("PERSONA_FORGE_PACE", "1.0-2.5")  # seconds between pages on one site; "0" = off
+        lo, _, hi = pace.partition("-")
+        self._pace_range = (float(lo or 0), float(hi or lo or 0))
         self.max_page_chars = max_page_chars
         self.http = requests.Session()
         self.http.headers["User-Agent"] = USER_AGENT
@@ -432,6 +448,60 @@ class Researcher:
     def _skip(self, url: str, reason: str) -> None:
         self.skipped.append((url, reason))
 
+    def _pace(self, url: str) -> None:
+        """Human pace: a short, varied pause between pages on the same site (other sites load in parallel)."""
+        dom = self._domain(url)
+        with self._pace_lock:
+            now = time.time()
+            if self._pace_range[1] <= 0:
+                return
+            start = max(now, self._last_hit.get(dom, 0) + random.uniform(*self._pace_range))
+            self._last_hit[dom] = start
+        if start > now:
+            time.sleep(start - now)
+
+    def browser(self):
+        """The real-browser reader, started on first need. None if switched off or unavailable."""
+        if self.browser_mode == "off" or self._browser_failed:
+            return None
+        with self._browser_lock:
+            if self._browser is None and not self._browser_failed:
+                from pathlib import Path
+
+                from .browser import BrowserFetcher, BrowserUnavailable
+
+                try:
+                    root = Path(self.profile_dir) if self.profile_dir else Path(__file__).resolve().parents[1] / ".browser_profile"
+                    self._browser = BrowserFetcher(root, visible=self.browser_mode == "visible",
+                                                   confirm_adult=self.confirm_adult)
+                    log(f"→ Real-browser reader ready ({self._browser.name}"
+                        + (", visible window" if self.browser_mode == "visible" else "") + ")")
+                except BrowserUnavailable as e:
+                    self._browser_failed = True
+                    log(f"  ! Real-browser reader not available: {e}")
+                    return None
+                import atexit
+
+                atexit.register(self._browser.close)
+        return self._browser
+
+    def _needs_browser(self, resp, kind: str) -> bool:
+        """Use the real browser for pages you chose (and the creator's own channels) when the fast reader
+        didn't get the page: refused, a human check, an unanswered age page, or a JS-only page with no text."""
+        if self.browser_mode == "off" or kind not in ("user", "hub", "platform"):
+            return False
+        gate = getattr(resp, "age_gate", "")
+        if gate in ("strict", "off"):
+            return False  # real verification is never bypassed; "off" = the user didn't confirm 18+
+        if gate or resp.status_code >= 400:
+            return True
+        if "html" not in resp.headers.get("content-type", ""):
+            return False
+        from .browser import CHALLENGE_RE
+
+        text, title = extract_main_text(resp.text)
+        return len(text) < 300 or bool(CHALLENGE_RE.search(title + " " + text[:1500]) and len(text) < 1500)
+
     def _pass_age_gate(self, url: str, resp: requests.Response) -> requests.Response | None:
         """Answer a simple click-through age gate the way a browser would, then load the page again.
         1) remember-me cookies the gate commonly checks, 2) the gate's own "Enter / I am 18" link or form."""
@@ -498,6 +568,7 @@ class Researcher:
         return None
 
     def _get(self, url: str, retry: bool) -> requests.Response:
+        self._pace(url)
         resp = self.http.get(url, headers=BROWSER_HEADERS, timeout=self.timeout)
         if resp.status_code < 400 and "html" in resp.headers.get("content-type", ""):
             kind = age_gate_kind(resp.text)
@@ -559,7 +630,24 @@ class Researcher:
         src = None
         is_youtube = self._domain(url) in ("youtube.com", "m.youtube.com") and "/watch" in url
         try:
-            resp = self._get(url, retry=user_supplied)
+            resp = None
+            if self.browser_mode == "always" and kind in ("user", "hub", "platform") and (b := self.browser()):
+                self._pace(url)
+                try:
+                    resp = b.load(url)
+                except Exception as e:  # noqa: BLE001
+                    log(f"  ! {label}: real browser failed ({e.__class__.__name__}) – using the fast reader")
+            if resp is None or (resp.status_code >= 400 and not getattr(resp, "age_gate", "")):
+                resp = self._get(url, retry=user_supplied)
+                if self._needs_browser(resp, kind) and (b := self.browser()):
+                    self._pace(url)
+                    try:
+                        page = b.load(url)
+                        if page.status_code < 400 and not page.age_gate:
+                            log(f"  i {label}: read with the real browser")
+                        resp = page if (page.status_code < 400 or page.age_gate) else resp
+                    except Exception as e:  # noqa: BLE001
+                        log(f"  ! {label}: real browser failed ({e.__class__.__name__})")
             ctype = resp.headers.get("content-type", "")
             gate = getattr(resp, "age_gate", "")
             if gate:
@@ -569,6 +657,11 @@ class Researcher:
                     "click": "an age-confirmation page the app couldn't answer automatically – " + BLOCKED_TIP,
                     "off": "an “Are you 18?” page – tick “I'm 18+” (web UI) or use --confirm-adult to let the app "
                            "answer it",
+                    "challenge": ("the site asked to verify you're human – choose Page reader → “Visible browser” "
+                                  "(web UI) or --browser visible, and complete the check yourself when the window "
+                                  "opens" if self.browser_mode != "visible" else
+                                  "the human check wasn't completed in time – run again and complete it in the "
+                                  "browser window"),
                 }[gate]
                 self._skip(url, why)
                 log(f"  ! {label}: {why}")

@@ -8,10 +8,11 @@ from __future__ import annotations
 import base64
 import json
 import os
+os.environ.setdefault("PERSONA_FORGE_PACE", "0")
 import sys
 import tempfile
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -244,7 +245,8 @@ class FakeMarinara(BaseHTTPRequestHandler):
 
 
 def serve(handler) -> tuple[HTTPServer, str]:
-    srv = HTTPServer(("127.0.0.1", 0), handler)
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    srv.daemon_threads = True
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv, f"http://127.0.0.1:{srv.server_port}"
 
@@ -254,6 +256,12 @@ ORIG_FETCH = Researcher.fetch
 
 class FakeWeb(BaseHTTPRequestHandler):
     base = ""
+
+    def handle(self):
+        try:
+            super().handle()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def log_message(self, *a):
         pass
@@ -307,6 +315,28 @@ class FakeWeb(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/html")
             self.end_headers()
             self.wfile.write((article if ok else gate_html).encode())
+            return
+        js_routes = {
+            # text only exists after JavaScript runs
+            "/jsonly": "<html><head><title>Profile</title></head><body><div id=app></div><script>"
+                       "document.getElementById('app').innerHTML='<article><p>' + 'Nova Test writes her own bio here. '.repeat(30) + '</p></article>';"
+                       "</script></body></html>",
+            # an age gate that is only a JavaScript button (no link or form for the fast reader)
+            "/jsgate": (("<html><head><title>Interview</title></head><body>" if "jsok=1" in cookies else
+                         "<html><head><title>Age Verification</title></head><body>")
+                        + ("<article><p>" + "Nova Test talks about her career. " * 40 + "</p></article>"
+                           if "jsok=1" in cookies else
+                           "<h1>Are you 18 or older?</h1>This website contains adult content."
+                           "<button onclick=\"document.cookie='jsok=1;path=/';location.reload()\">I am 18 or older</button>"
+                           "<button onclick=\"location.href='/leave'\">Leave</button>")
+                        + "</body></html>"),
+            "/challenge": "<html><head><title>Just a moment...</title></head><body>Checking your browser before accessing the site.</body></html>",
+        }
+        if self.path in js_routes:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(js_routes[self.path].encode())
             return
         if self.path.startswith("/magazine/interview"):
             body = ("<html><body><article><p>" + "Magazine interview with Nova Test. " * 30 +
@@ -580,6 +610,25 @@ def main():
         rn = R3(cache=None, search_provider="none", confirm_adult=False)
         check(rn.fetch(web_url + "/gated", kind="user") is None and
               any("I'm 18+" in why for _, why in rn.skipped), "without the 18+ box, gates are reported, not answered")
+
+        # ── Real-browser reader (headless Chrome via Playwright)
+        rb = R3(cache=None, search_provider="none", confirm_adult=True, browser_mode="auto",
+                profile_dir=str(Path(tmp) / "bprofile"))
+        if rb.browser() is None:
+            print("  (skipped: no browser available for Playwright)")
+        else:
+            got = rb.fetch(web_url + "/jsonly", kind="user")
+            check(got is not None and "writes her own bio" in got.text, "JavaScript-only page read with the real browser")
+            got = rb.fetch(web_url + "/jsgate", kind="user")
+            check(got is not None and "talks about her career" in got.text, "JavaScript age-gate button clicked in the browser")
+            check(rb.fetch(web_url + "/challenge", kind="user") is None and
+                  any("verify you're human" in why and "Visible browser" in why for _, why in rb.skipped),
+                  "human check not bypassed; user pointed to Visible browser mode")
+            check(rb.fetch(web_url + "/jsonly?from=search", kind="web") is None,
+                  "search-result pages stay on the fast reader (browser only for pages you chose)")
+            rb._browser.close()
+        roff = R3(cache=None, search_provider="none", confirm_adult=True, browser_mode="off")
+        check(roff.fetch(web_url + "/jsonly", kind="user") is None, "browser off: JavaScript-only page reported, not read")
 
         # ── A page-reading model the provider doesn't know falls back to the main model
         fb = io.StringIO()
