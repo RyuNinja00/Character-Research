@@ -1,14 +1,15 @@
 # Persona Forge: Step-by-Step Manual
 
 This manual takes you from a fresh computer to a finished character card and lorebook running in
-Marinara Engine. Follow the parts in order the first time. After that, use **Part 6 (the creator
-workflow)** and the **quick reference** at the end.
+Marinara Engine. Follow the parts in order the first time. **Most people only need Parts 1–3 and then the
+web UI (Part 3b).** Parts 4 onward cover the command line and the details behind each option.
 
 **Contents**
 
 1. What you need
 2. Install
 3. Connect an AI model (`.env`)
+3b. Use the web UI (easiest)
 4. Test run with a public figure
 5. Set up a talent folder
 6. The creator workflow, step by step
@@ -200,6 +201,79 @@ CARD_CREATOR=YourAgencyName
 
 ---
 
+## 3b. Use the web UI (easiest)
+
+The web UI is a form in your browser with a box for every option, a short example under each one, and a live
+run log. It runs only on your computer and needs nothing extra installed.
+
+### Start it
+
+From the project folder, with the virtual environment active (Part 2.2):
+
+```bash
+python -m persona_forge.webui
+```
+
+Your browser opens at **http://127.0.0.1:8765**. Leave the terminal open while you use it, and press
+**Ctrl+C** in it to stop. Options: `--port 9000` for another port, `--no-browser` to not open a tab.
+
+The first start creates the `talent/` folder in the project.
+
+### Build a card
+
+1. **Section 1 · Who:** pick the mode (*Managed creator*, *Public / historical figure* or *Fictional
+   character*), type the **Name**, and for creators the **Consent note**. These are the only required boxes,
+   marked with \*. Typing the name creates the creator's folder (below).
+2. **Section 2 · Where to look:** paste the **Link-in-bio** URL and any **Extra pages**. *Deep research* is
+   on by default.
+3. **Section 3 · Creator files & images** (optional): fill in the brief, review the hard limits, and drop
+   in reference photos, a card image, finished sprites or text files (transcripts, Q&As). Uploads go straight
+   into the creator's folder.
+4. **Sections 4–7** (optional): chat style, opening premise, AI model, sending to Marinara, advanced limits.
+   Leave anything empty to use the default. Empty model boxes use your `.env` values, shown in grey.
+5. Click **Build card**. The log on the right shows progress. When it finishes, the card image and every
+   output file appear under it. Click any file to open it, and start with **review.md**.
+6. To change the writing without researching again, edit sections 3–6 and click **Rebuild writing
+   only**. It takes seconds to a minute.
+
+To come back to a creator later, pick them from the drop-down at the top. Their settings, brief, limits,
+links and files load automatically.
+
+### What happens with empty or odd boxes
+
+- Empty boxes are left out of the run, so the app's defaults apply.
+- A number box with something that isn't a number (e.g. `abc`) is ignored with a note in the log. It doesn't
+  stop the run.
+- The **brief** is only used once you've written something in it. The untouched template is left out.
+- In **Hard limits**, lines still containing a `<placeholder>` are skipped, and the rest are used.
+- If a creator has no link hub, pages, brief or files, web search on the name is switched on automatically,
+  so there's always something to read. (With *Offline* ticked you get a clear message instead.)
+- API keys and passwords are never saved in the creator folder. Tick **Save these model settings to .env** to
+  keep them.
+
+### The creator folder it builds
+
+```
+talent/
+  Ivy_Wren/
+    settings.json      every box you filled in (no keys or passwords) – reloads into the form
+    brief.md           creator brief (starts as the template)
+    limits.txt         hard limits (starts as the template)
+    urls.txt           the "Extra pages" box
+    references/        reference photos  → sprite kit
+    avatar/            card image
+    sprites/           finished expression sprites
+      full-body/       finished full-body sprites
+    sources/           text files (transcripts, Q&As…)
+    output/
+      Ivy_Wren/        the card PNG, card JSON, lorebook, review.md, dossier.json, sprite_kit/…
+    runs/              a log of every run, with date and time
+```
+
+The whole `talent/` folder is git-ignored, so photos, briefs and outputs never get uploaded to GitHub.
+
+---
+
 ## 4. Test run with a public figure
 
 Do this once to confirm everything works before you use it on a creator.
@@ -221,6 +295,7 @@ Open `output/Marie_Curie/review.md` to see what it found. If that works, your se
 
 ## 5. Set up a talent folder
 
+The web UI creates and fills this folder for you (Part 3b). This part is for running from the command line.
 Keep each creator's material in one folder. The `talent/` folder is git-ignored, so nothing private gets
 uploaded.
 
@@ -561,6 +636,7 @@ Run `python -m persona_forge --help` for the full list. These are the main optio
 
 | Problem | Fix |
 | --- | --- |
+| Web UI page doesn't open | Check the terminal for the address, or open http://127.0.0.1:8765 yourself. If the port is in use, start it with `--port 9000`. |
 | `python` not found | Use `python3` (Mac/Linux), or reinstall Python with **Add to PATH** ticked (Windows). |
 | `No module named requests` | Activate the virtual environment (Part 2.2), then `pip install -r requirements.txt`. |
 | `The model (…) refused this step` | The model won't write adult content. Set a different `LLM_MODEL` (Part 3.1) and rebuild with the `--from-dossier` command the app printed. Your research is kept. |

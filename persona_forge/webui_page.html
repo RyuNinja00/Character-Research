@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Persona Forge</title>
+<style>
+  :root {
+    --bg: #f6f4f1; --panel: #ffffff; --ink: #1d1b19; --muted: #6b655e; --line: #e4dfd8;
+    --accent: #b8452f; --accent-ink: #fff; --ok: #2f7d4f; --warn: #a86b00; --bad: #b3261e;
+    --soft: #faf8f5; --radius: 10px; --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#161514; --panel:#201e1c; --ink:#eeeae4; --muted:#a39b91; --line:#35322e; --soft:#1b1a18;
+            --accent:#e0735b; --accent-ink:#1a0f0b; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif; }
+  header { padding: 18px 28px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 18px;
+           background: var(--panel); position: sticky; top: 0; z-index: 5; flex-wrap: wrap; }
+  header h1 { font-size: 18px; margin: 0; letter-spacing: .2px; }
+  header h1 span { color: var(--accent); }
+  header .grow { flex: 1; }
+  header select { width: auto; min-width: 260px; max-width: 420px; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 440px; gap: 24px; padding: 24px 28px 80px; }
+  @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+  section.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+                 margin-bottom: 18px; overflow: hidden; }
+  section.card > h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted);
+                      margin: 0; padding: 14px 18px; border-bottom: 1px solid var(--line); cursor: pointer;
+                      display: flex; justify-content: space-between; user-select: none; }
+  section.card > h2::after { content: "–"; }
+  section.card.collapsed > h2::after { content: "+"; }
+  section.card.collapsed > .body { display: none; }
+  .body { padding: 6px 18px 14px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 22px; }
+  .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 22px; }
+  @media (max-width: 700px) { .grid2, .grid3 { grid-template-columns: 1fr; } }
+  .field { padding: 10px 0; }
+  .field > label { display: block; font-weight: 600; font-size: 14px; margin-bottom: 4px; }
+  .req::after { content: " *"; color: var(--accent); }
+  .hint { color: var(--muted); font-size: 12.5px; margin-top: 4px; }
+  .hint code, .hint b { color: var(--ink); }
+  input[type=text], input[type=password], input[type=number], select, textarea {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--soft);
+    color: var(--ink); font: inherit; }
+  textarea { min-height: 70px; resize: vertical; }
+  textarea.tall { min-height: 220px; font-family: var(--mono); font-size: 12.5px; }
+  input:focus, select:focus, textarea:focus { outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+                                              border-color: var(--accent); }
+  .check { display: flex; gap: 10px; align-items: flex-start; padding: 9px 0; }
+  .check input { margin-top: 3px; width: 16px; height: 16px; accent-color: var(--accent); }
+  .check label { font-weight: 600; font-size: 14px; }
+  .check .hint { margin-top: 1px; }
+  .modes { display: flex; gap: 8px; flex-wrap: wrap; }
+  .modes label { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; cursor: pointer;
+                 background: var(--soft); font-weight: 600; font-size: 14px; }
+  .modes input { display: none; }
+  .modes input:checked + span { color: var(--accent); }
+  .modes label:has(input:checked) { border-color: var(--accent); }
+  .drop { border: 1.5px dashed var(--line); border-radius: 8px; padding: 10px 12px; background: var(--soft); }
+  .drop.over { border-color: var(--accent); }
+  .drop input { font-size: 13px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chip { font-size: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 99px;
+          padding: 2px 4px 2px 10px; display: inline-flex; align-items: center; gap: 4px; }
+  .chip button { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 14px; padding: 0 4px; }
+  button.btn { border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 8px;
+               padding: 9px 14px; font: inherit; font-weight: 600; cursor: pointer; }
+  button.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  button.btn:disabled { opacity: .45; cursor: not-allowed; }
+  aside { position: sticky; top: 86px; align-self: start; }
+  @media (max-width: 1100px) { aside { position: static; } }
+  .run { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
+  .run .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  .status { font-size: 13px; color: var(--muted); margin: 6px 0 10px; min-height: 18px; }
+  .status.done { color: var(--ok); } .status.failed { color: var(--bad); } .status.running { color: var(--warn); }
+  pre.log { background: #12110f; color: #e9e4dc; font: 12px/1.5 var(--mono); border-radius: 8px; padding: 12px;
+            height: 360px; overflow: auto; white-space: pre-wrap; word-break: break-word; margin: 0; }
+  pre.log:empty::before { content: "The run log appears here."; color: #8a837a; }
+  pre.log:empty { height: 80px; }
+  pre.log .w { color: #f2b35b; } pre.log .ok { color: #7fd49a; } pre.log .i { color: #8fb8ff; }
+  .errors { background: color-mix(in srgb, var(--bad) 10%, transparent); color: var(--bad); border-radius: 8px;
+            padding: 10px 12px; font-size: 13.5px; margin-bottom: 10px; display: none; }
+  .outputs { margin-top: 14px; }
+  .outputs h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 8px; }
+  .outputs ul { list-style: none; padding: 0; margin: 0; max-height: 260px; overflow: auto; }
+  .outputs li { display: flex; justify-content: space-between; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--line);
+                font-size: 13px; }
+  .outputs a { color: var(--accent); text-decoration: none; }
+  .outputs .cardimg { max-width: 120px; border-radius: 8px; border: 1px solid var(--line); margin-bottom: 8px; display: block; }
+  .folder { font: 12px var(--mono); color: var(--muted); word-break: break-all; margin-top: 8px; }
+  .muted { color: var(--muted); }
+  .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg);
+           padding: 8px 14px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  .toast.show { opacity: .95; }
+  [data-modes] { } .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Persona <span>Forge</span></h1>
+  <select id="talentPicker" title="Load a saved creator or character">
+    <option value="">＋ New creator / character</option>
+  </select>
+  <div class="grow"></div>
+  <span class="muted" id="rootInfo" style="font-size:12px"></span>
+</header>
+
+<main>
+<form id="form" autocomplete="off" onsubmit="return false">
+
+  <!-- ─────────────────────────────── BASICS -->
+  <section class="card">
+    <h2>1 · Who</h2>
+    <div class="body">
+      <div class="field">
+        <label>Mode</label>
+        <div class="modes">
+          <label><input type="radio" name="mode" value="talent" checked><span>Managed creator</span></label>
+          <label><input type="radio" name="mode" value="public"><span>Public / historical figure</span></label>
+          <label><input type="radio" name="mode" value="fictional"><span>Fictional character</span></label>
+        </div>
+        <div class="hint">Managed creator = a creator you work for, with their consent. Public figures start from Wikipedia. Fictional characters use the pages you give (e.g. a fan wiki).</div>
+      </div>
+      <div class="grid2">
+        <div class="field">
+          <label class="req" for="name">Name</label>
+          <input type="text" id="name" name="name" placeholder="Ivy Wren">
+          <div class="hint">Exactly as they use it, e.g. the stage name. Creates the folder <code>talent/&lt;name&gt;/</code>.</div>
+        </div>
+        <div class="field">
+          <label for="descriptor">Who they are</label>
+          <input type="text" id="descriptor" name="descriptor" placeholder="adult content creator and streamer">
+          <div class="hint">A few words that tell them apart from others with the same name.</div>
+        </div>
+      </div>
+      <div class="field" data-modes="talent">
+        <label class="req" for="consent_note">Consent note</label>
+        <input type="text" id="consent_note" name="consent_note" placeholder="Authorised by Ivy Wren (release on file), 2026-11-14">
+        <div class="hint">Who approved this card and when. Shown at the top of the card's creator notes.</div>
+      </div>
+      <div class="grid2">
+        <div class="check"><input type="checkbox" id="nsfw" name="nsfw"><div>
+          <label for="nsfw">18+ adult card</label>
+          <div class="hint">Reads the creator's own adult-platform pages and works out content themes. Minor-coded themes are always excluded.</div></div></div>
+        <div class="field">
+          <label for="creator">Card creator name</label>
+          <input type="text" id="creator" name="creator" placeholder="Ivy Wren">
+          <div class="hint">Shown as the card's creator. Empty = “Persona Forge”.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────────────────────────── SOURCES -->
+  <section class="card">
+    <h2>2 · Where to look</h2>
+    <div class="body">
+      <div class="field" data-modes="public">
+        <label for="wiki_title">Exact Wikipedia title</label>
+        <input type="text" id="wiki_title" name="wiki_title" placeholder="Marie Curie">
+        <div class="hint">Only needed if the name matches several people. Empty = the top match is used.</div>
+      </div>
+      <div class="grid2">
+        <div class="field">
+          <label for="seeds">Link-in-bio pages</label>
+          <textarea id="seeds" name="seeds" placeholder="https://linktr.ee/iivywren"></textarea>
+          <div class="hint">One per line. The app reads it <b>and every page it links to</b>: Linktree, Beacons, AllMyLinks, Carrd…</div>
+        </div>
+        <div class="field">
+          <label for="urls">Extra pages</label>
+          <textarea id="urls" name="urls" placeholder="https://example.com/interview-with-ivy&#10;https://podcast.example.com/ep42"></textarea>
+          <div class="hint">One per line: interviews, podcasts, their website, profile or store pages. Saved to <code>urls.txt</code>.</div>
+        </div>
+      </div>
+      <div class="field" data-modes="talent fictional">
+        <label for="handles">Platform usernames</label>
+        <input type="text" id="handles" name="handles" placeholder="ivywrenxo, @ivy_w">
+        <div class="hint">Only if they differ from the stage name. Usernames in the link hub's links are found automatically.</div>
+      </div>
+      <div class="grid2">
+        <div class="check"><input type="checkbox" id="deep" name="deep" checked><div>
+          <label for="deep">Deep research</label>
+          <div class="hint">Keeps searching until the profile is about 85% complete. Usually 5–20 min.</div></div></div>
+        <div class="check"><input type="checkbox" id="search_web" name="search_web"><div>
+          <label for="search_web">Search the web for the name</label>
+          <div class="hint">Interviews and podcasts. Already included in Deep research.</div></div></div>
+        <div class="check" data-modes="talent"><input type="checkbox" id="audience_research" name="audience_research"><div>
+          <label for="audience_research">Audience report</label>
+          <div class="hint">A separate report on what fans say. Never used in the card.</div></div></div>
+        <div class="check"><input type="checkbox" id="no_web" name="no_web"><div>
+          <label for="no_web">Offline</label>
+          <div class="hint">Only use the links, pages and files you give. No searching.</div></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────────────────────────── CREATOR FILES -->
+  <section class="card">
+    <h2>3 · Creator files &amp; images</h2>
+    <div class="body">
+      <div class="grid2">
+        <div class="field">
+          <label for="brief">Creator brief <span class="muted">(optional)</span></label>
+          <textarea class="tall" id="brief" name="brief"></textarea>
+          <div class="hint">The creator's own words. The strongest source for voice. Used only after you fill something in. Saved as <code>brief.md</code>.</div>
+        </div>
+        <div class="field">
+          <label for="limits">Hard limits</label>
+          <textarea class="tall" id="limits" name="limits"></textarea>
+          <div class="hint">Added word for word to the card's rules. Lines still containing <code>&lt;placeholders&gt;</code> are skipped. Saved as <code>limits.txt</code>.</div>
+        </div>
+      </div>
+      <div class="grid2">
+        <div class="field">
+          <label>Reference photos</label>
+          <div class="drop" data-kind="references"><input type="file" multiple accept="image/*"></div>
+          <div class="chips" id="files-references"></div>
+          <div class="hint">2–4 approved photos: face, three-quarter angle, full body, tattoos. Builds the sprite kit. First file = first reference.</div>
+        </div>
+        <div class="field">
+          <label>Card image</label>
+          <div class="drop" data-kind="avatar"><input type="file" accept="image/*"></div>
+          <div class="chips" id="files-avatar"></div>
+          <div class="hint">One image. Empty = first reference photo (if ticked below), a generated portrait, or a placeholder.</div>
+        </div>
+        <div class="field">
+          <label>Finished expression sprites</label>
+          <div class="drop" data-kind="sprites"><input type="file" multiple accept="image/*"></div>
+          <div class="chips" id="files-sprites"></div>
+          <div class="hint">Named by mood: <code>happy.png</code>, <code>flustered.png</code>. Embedded in the card.</div>
+        </div>
+        <div class="field">
+          <label>Finished full-body sprites</label>
+          <div class="drop" data-kind="fullbody"><input type="file" multiple accept="image/*"></div>
+          <div class="chips" id="files-fullbody"></div>
+          <div class="hint">Named by pose: <code>idle.png</code>, <code>wave.png</code>.</div>
+        </div>
+        <div class="field">
+          <label>Text sources</label>
+          <div class="drop" data-kind="sources"><input type="file" multiple accept=".txt,.md,.json,.html,.htm"></div>
+          <div class="chips" id="files-sources"></div>
+          <div class="hint">Transcripts, Q&amp;As, saved captions (.txt .md .json .html). Treated as authoritative.</div>
+        </div>
+        <div>
+          <div class="check"><input type="checkbox" id="avatar_from_reference" name="avatar_from_reference" checked><div>
+            <label for="avatar_from_reference">Use first reference photo as card image</label>
+            <div class="hint">Lets Marinara's “use current avatar as reference” box work.</div></div></div>
+          <div class="check"><input type="checkbox" id="generate_avatar" name="generate_avatar"><div>
+            <label for="generate_avatar">Generate a portrait if there's no card image</label>
+            <div class="hint">Illustrated, clothed, made from the text description only. Needs an image service (section 5).</div></div></div>
+        </div>
+      </div>
+      <div class="grid3">
+        <div class="field">
+          <label for="avatar_style">Portrait style</label>
+          <input type="text" id="avatar_style" name="avatar_style" placeholder="digital painting portrait">
+          <div class="hint">For the generated portrait, e.g. “anime portrait”.</div>
+        </div>
+        <div class="field">
+          <label for="sprite_expressions">Kit expressions</label>
+          <input type="number" id="sprite_expressions" name="sprite_expressions" placeholder="12" min="1" max="16">
+          <div class="hint">How many expressions the sprite kit plans (1–16).</div>
+        </div>
+        <div class="field">
+          <label for="sprite_poses">Kit full-body poses</label>
+          <input type="number" id="sprite_poses" name="sprite_poses" placeholder="6" min="1" max="16">
+          <div class="hint">How many full-body poses (1–16).</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────────────────────────── CHARACTER -->
+  <section class="card">
+    <h2>4 · The character</h2>
+    <div class="body">
+      <div class="grid2">
+        <div class="field">
+          <label for="style">Chat style</label>
+          <select id="style" name="style">
+            <option value="">Default (roleplay)</option>
+            <option value="chat">Texting: Marinara Conversation chats</option>
+            <option value="roleplay">Prose and narration: Roleplay chats</option>
+          </select>
+          <div class="hint">How greetings and example messages are written.</div>
+        </div>
+        <div class="field">
+          <label for="pov">Narration</label>
+          <select id="pov" name="pov">
+            <option value="">Default (third person)</option>
+            <option value="third">Third person: “She smiles…”</option>
+            <option value="first">First person: “I smile…”</option>
+          </select>
+          <div class="hint">Only affects the roleplay style.</div>
+        </div>
+      </div>
+      <div class="field">
+        <label for="scenario">Opening premise</label>
+        <input type="text" id="scenario" name="scenario" placeholder="{{user}} is a longtime subscriber who finally gets a DM back">
+        <div class="hint">Where and how the first chat starts. Empty = the app picks one from their real life.</div>
+      </div>
+      <div class="grid3">
+        <div class="field">
+          <label for="era">Portray them as of</label>
+          <input type="text" id="era" name="era" placeholder="2026">
+          <div class="hint">A year or period. Later events are left out.</div>
+        </div>
+        <div class="field">
+          <label for="greetings">Alternate greetings</label>
+          <input type="number" id="greetings" name="greetings" placeholder="3" min="0" max="20">
+          <div class="hint">Extra opening messages (0–20).</div>
+        </div>
+        <div class="field">
+          <label for="lore_entries">Max lorebook entries</label>
+          <input type="number" id="lore_entries" name="lore_entries" placeholder="40" min="1" max="200">
+          <div class="hint">People, places, events, themes.</div>
+        </div>
+        <div class="field">
+          <label for="language">Language</label>
+          <input type="text" id="language" name="language" placeholder="English">
+          <div class="hint">The language the card is written in.</div>
+        </div>
+        <div class="field">
+          <label for="spec">JSON card format</label>
+          <select id="spec" name="spec">
+            <option value="">Default (V2)</option><option value="v2">V2</option><option value="v3">V3</option>
+          </select>
+          <div class="hint">The PNG card always contains both.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────────────────────────── MODEL -->
+  <section class="card">
+    <h2>5 · AI model</h2>
+    <div class="body">
+      <div class="hint" style="margin:6px 0 4px">Empty boxes use the values in <code>.env</code>, shown in grey.</div>
+      <div class="grid2">
+        <div class="field">
+          <label for="base_url">API base URL</label>
+          <input type="text" id="base_url" name="base_url" placeholder="https://api.featherless.ai/v1">
+          <div class="hint">Any OpenAI-compatible service: Featherless, OpenRouter, a local Ollama…</div>
+        </div>
+        <div class="field">
+          <label for="api_key">API key</label>
+          <input type="password" id="api_key" name="api_key" placeholder="sk-…">
+          <div class="hint">Never stored in the creator folder. Tick “Save to .env” to keep it.</div>
+        </div>
+        <div class="field">
+          <label for="model">Model</label>
+          <input type="text" id="model" name="model" placeholder="huihui-ai/Huihui-Qwen3.5-27B-abliterated">
+          <div class="hint">Writes the dossier, card and lorebook. For 18+ cards, pick one that allows adult content.</div>
+        </div>
+        <div class="field">
+          <label for="extract_model">Page-reading model <span class="muted">(optional)</span></label>
+          <input type="text" id="extract_model" name="extract_model" placeholder="TrevorJS/gemma-4-26B-A4B-it-uncensored">
+          <div class="hint">A cheaper or faster model for reading pages. Empty = same as Model.</div>
+        </div>
+      </div>
+      <div class="grid3">
+        <div class="field">
+          <label for="workers">Parallel requests</label>
+          <input type="number" id="workers" name="workers" placeholder="4" min="1" max="16">
+          <div class="hint">Featherless Chat plan: <b>2</b>. Local models: <b>1</b>.</div>
+        </div>
+        <div class="field">
+          <label for="max_tokens">Max reply tokens</label>
+          <input type="number" id="max_tokens" name="max_tokens" placeholder="8192">
+          <div class="hint">Featherless (32K context): <b>6144</b>.</div>
+        </div>
+        <div class="field">
+          <label for="json_mode">JSON mode</label>
+          <select id="json_mode" name="json_mode">
+            <option value="">Default (auto)</option><option value="auto">auto</option><option value="on">on</option><option value="off">off</option>
+          </select>
+          <div class="hint">Use “off” if a local server rejects it.</div>
+        </div>
+      </div>
+      <div class="grid3">
+        <div class="field">
+          <label for="image_base_url">Image API URL</label>
+          <input type="text" id="image_base_url" name="image_base_url" placeholder="https://api.openai.com/v1">
+          <div class="hint">Only for “Generate a portrait”.</div>
+        </div>
+        <div class="field">
+          <label for="image_api_key">Image API key</label>
+          <input type="password" id="image_api_key" name="image_api_key" placeholder="sk-…">
+          <div class="hint">Empty = the AI model's key.</div>
+        </div>
+        <div class="field">
+          <label for="image_model">Image model</label>
+          <input type="text" id="image_model" name="image_model" placeholder="gpt-image-1">
+          <div class="hint">Any /images/generations model.</div>
+        </div>
+      </div>
+      <div class="check"><input type="checkbox" id="save_env" name="save_env"><div>
+        <label for="save_env">Save these model settings to .env</label>
+        <div class="hint">So you don't have to type them again. Only filled boxes are saved.</div></div></div>
+    </div>
+  </section>
+
+  <!-- ─────────────────────────────── MARINARA -->
+  <section class="card collapsed">
+    <h2>6 · Send to Marinara</h2>
+    <div class="body">
+      <div class="check"><input type="checkbox" id="push" name="push"><div>
+        <label for="push">Import into Marinara when finished</label>
+        <div class="hint">Creates the character and its linked lorebook. Marinara must be running.</div></div></div>
+      <div class="grid3">
+        <div class="field">
+          <label for="push_url">Marinara address</label>
+          <input type="text" id="push_url" name="push_url" placeholder="http://127.0.0.1:7860">
+          <div class="hint">Empty = this computer, default port.</div>
+        </div>
+        <div class="field">
+          <label for="marinara_user">Login user</label>
+          <input type="text" id="marinara_user" name="marinara_user" placeholder="(only if Marinara has a login)">
+          <div class="hint">Leave empty if there's no login.</div>
+        </div>
+        <div class="field">
+          <label for="marinara_pass">Login password</label>
+          <input type="password" id="marinara_pass" name="marinara_pass">
+          <div class="hint">Never stored in the creator folder.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────────────────────────── ADVANCED -->
+  <section class="card collapsed">
+    <h2>7 · Advanced</h2>
+    <div class="body">
+      <div class="grid3">
+        <div class="field">
+          <label for="target_coverage">Deep research target</label>
+          <input type="text" id="target_coverage" name="target_coverage" placeholder="85">
+          <div class="hint">Stop when the profile is this % complete.</div>
+        </div>
+        <div class="field">
+          <label for="max_rounds">Deep research rounds</label>
+          <input type="number" id="max_rounds" name="max_rounds" placeholder="4">
+          <div class="hint">The most extra search rounds.</div>
+        </div>
+        <div class="field">
+          <label for="pages_per_round">Pages per round</label>
+          <input type="number" id="pages_per_round" name="pages_per_round" placeholder="10">
+          <div class="hint">New pages read in each round.</div>
+        </div>
+        <div class="field">
+          <label for="max_pages">First-pass web pages</label>
+          <input type="number" id="max_pages" name="max_pages" placeholder="12">
+          <div class="hint">Web pages read before deep research.</div>
+        </div>
+        <div class="field">
+          <label for="site_pages">Sub-pages per own site</label>
+          <input type="number" id="site_pages" name="site_pages" placeholder="5">
+          <div class="hint">About, FAQ and blog pages on the creator's own websites (0 = off).</div>
+        </div>
+        <div class="field">
+          <label for="seed_max_links">Links per link hub</label>
+          <input type="number" id="seed_max_links" name="seed_max_links" placeholder="25">
+          <div class="hint">The most links followed on a Linktree.</div>
+        </div>
+        <div class="field">
+          <label for="seed_depth">Link-hub depth</label>
+          <input type="number" id="seed_depth" name="seed_depth" placeholder="1" min="1" max="3">
+          <div class="hint">2 = also crawl hubs linked from the hub.</div>
+        </div>
+        <div class="field">
+          <label for="search_provider">Search engine</label>
+          <select id="search_provider" name="search_provider">
+            <option value="">Default (auto)</option><option value="ddg">DuckDuckGo (free)</option>
+            <option value="tavily">Tavily (key in .env)</option><option value="brave">Brave (key in .env)</option>
+            <option value="searxng">SearXNG (URL in .env)</option>
+          </select>
+          <div class="hint">Auto uses a paid key from .env if there is one.</div>
+        </div>
+        <div class="field">
+          <label for="audience_pages">Audience report pages</label>
+          <input type="number" id="audience_pages" name="audience_pages" placeholder="20">
+          <div class="hint">Discussion pages read for the audience report.</div>
+        </div>
+        <div class="field">
+          <label for="scan_depth">Lorebook scan depth</label>
+          <input type="number" id="scan_depth" name="scan_depth" placeholder="3">
+          <div class="hint">Recent messages checked for lorebook keywords.</div>
+        </div>
+        <div class="field">
+          <label for="token_budget">Lorebook token budget</label>
+          <input type="number" id="token_budget" name="token_budget" placeholder="2048">
+          <div class="hint">The most lorebook text added per reply.</div>
+        </div>
+      </div>
+      <div class="grid2">
+        <div class="check"><input type="checkbox" id="no_cache" name="no_cache"><div>
+          <label for="no_cache">Ignore the cache</label>
+          <div class="hint">Re-download pages and re-ask the model.</div></div></div>
+        <div class="check"><input type="checkbox" id="verbose" name="verbose"><div>
+          <label for="verbose">Detailed log</label>
+          <div class="hint">More lines in the run log.</div></div></div>
+        <div class="check"><input type="checkbox" id="merge_fields" name="merge_fields"><div>
+          <label for="merge_fields">SillyTavern-style description</label>
+          <div class="hint">Folds Appearance and Backstory into Description. Leave off for Marinara.</div></div></div>
+        <div class="check"><input type="checkbox" id="no_image_prompt" name="no_image_prompt"><div>
+          <label for="no_image_prompt">No image description</label>
+          <div class="hint">Skips Marinara's image prompt (and the sprite kit).</div></div></div>
+      </div>
+    </div>
+  </section>
+</form>
+
+<aside>
+  <div class="run">
+    <div class="errors" id="errors"></div>
+    <div class="actions">
+      <button class="btn primary" id="btnRun">Build card</button>
+      <button class="btn" id="btnRebuild" disabled title="Rewrite the card from the saved research – fast, no searching">Rebuild writing only</button>
+      <button class="btn" id="btnSave">Save</button>
+      <button class="btn" id="btnCancel" disabled>Cancel</button>
+    </div>
+    <div class="hint" style="margin-bottom:6px"><b>Build card</b> researches and writes everything. <b>Rebuild writing only</b> rewrites the card from saved research, with any changes to sections 3–6.</div>
+    <div class="status" id="status">Fill in a name to start. Every box except those marked * is optional.</div>
+    <pre class="log" id="log"></pre>
+    <div class="outputs" id="outputs"></div>
+    <div class="folder" id="folder"></div>
+  </div>
+</aside>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const form = $("#form");
+let slug = "", job = null, since = 0, pollTimer = null;
+
+function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 2200); }
+function mode() { return ($('input[name="mode"]:checked') || {}).value || "talent"; }
+function applyMode() {
+  $$("[data-modes]").forEach(el => el.classList.toggle("hidden", !el.dataset.modes.split(" ").includes(mode())));
+}
+$$('input[name="mode"]').forEach(r => r.addEventListener("change", applyMode));
+$$("section.card > h2").forEach(h => h.addEventListener("click", () => h.parentElement.classList.toggle("collapsed")));
+
+function collect() {
+  const data = { mode: mode() };
+  $$("input[name], textarea[name], select[name]", form).forEach(el => {
+    if (el.type === "radio") return;
+    data[el.name] = el.type === "checkbox" ? el.checked : el.value;
+  });
+  return data;
+}
+function fill(settings) {
+  $$("input[name], textarea[name], select[name]", form).forEach(el => {
+    if (el.type === "radio" || ["brief", "limits", "urls"].includes(el.name)) return;
+    if (!(el.name in settings)) return;
+    if (el.type === "checkbox") el.checked = !!settings[el.name];
+    else if (el.type !== "password") el.value = settings[el.name] ?? "";
+  });
+  const m = $(`input[name="mode"][value="${settings.mode || "talent"}"]`); if (m) m.checked = true;
+  applyMode();
+}
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, opts);
+  let j = {}; try { j = await r.json(); } catch (e) {}
+  if (!r.ok) throw Object.assign(new Error((j.errors || [j.error || r.statusText]).join("\n")), { errors: j.errors || [j.error] });
+  return j;
+}
+function showErrors(list) {
+  const box = $("#errors");
+  if (!list || !list.length) { box.style.display = "none"; return; }
+  box.innerHTML = list.map(e => "• " + e.replace(/</g, "&lt;")).join("<br>"); box.style.display = "block";
+}
+
+function renderFiles(info) {
+  for (const kind of ["references", "avatar", "sprites", "fullbody", "sources"]) {
+    const box = $("#files-" + kind); box.innerHTML = "";
+    (info.files[kind] || []).forEach(name => {
+      const chip = document.createElement("span"); chip.className = "chip"; chip.textContent = name;
+      const x = document.createElement("button"); x.type = "button"; x.title = "Remove"; x.textContent = "×";
+      x.onclick = async () => { renderFiles(await api(`/api/upload?talent=${slug}&kind=${kind}&filename=${encodeURIComponent(name)}`, { method: "DELETE" })); };
+      chip.appendChild(x); box.appendChild(chip);
+    });
+  }
+}
+function renderOutputs(list) {
+  const box = $("#outputs");
+  if (!list || !list.length) { box.innerHTML = ""; return; }
+  const png = list.find(f => /\.png$/.test(f.name) && !f.name.includes("/"));
+  box.innerHTML = "<h3>Output</h3>" + (png ? `<a href="/files/${slug}/${png.path}?download"><img class="cardimg" src="/files/${slug}/${png.path}?t=${Date.now()}" alt="card"></a>` : "") +
+    "<ul>" + list.map(f => {
+      const tip = f.name.endsWith(".png") && !f.name.includes("/") ? " – import this into Marinara" : f.name === "review.md" ? " – read this first" : "";
+      return `<li><a href="/files/${slug}/${f.path}" target="_blank">${f.name}</a><span class="muted">${tip || (f.size / 1024).toFixed(0) + " KB"}</span></li>`;
+    }).join("") + "</ul>";
+}
+function applyInfo(info) {
+  slug = info.slug;
+  $("#brief").value = info.brief; $("#limits").value = info.limits; $("#urls").value = info.urls;
+  renderFiles(info); renderOutputs(info.outputs);
+  $("#btnRebuild").disabled = !info.has_dossier || !!job;
+  $("#folder").textContent = "Folder: " + info.folder;
+}
+
+async function loadTalents(select) {
+  const j = await api("/api/talents");
+  $("#rootInfo").textContent = "Creator folders: " + j.root;
+  const p = $("#talentPicker"); p.length = 1;
+  j.talents.forEach(t => p.add(new Option(t.name + (t.has_output ? "  ✓" : ""), t.slug)));
+  if (select) p.value = select;
+  const e = j.env;
+  if (e.base_url) $("#base_url").placeholder = e.base_url + "  (from .env)";
+  if (e.model) $("#model").placeholder = e.model + "  (from .env)";
+  if (e.extract_model) $("#extract_model").placeholder = e.extract_model + "  (from .env)";
+  if (e.image_model) $("#image_model").placeholder = e.image_model + "  (from .env)";
+  if (e.has_api_key) $("#api_key").placeholder = "saved in .env";
+  if (e.has_image_key) $("#image_api_key").placeholder = "saved in .env";
+}
+$("#talentPicker").addEventListener("change", async e => {
+  if (!e.target.value) { form.reset(); slug = ""; applyMode(); $("#brief").value = $("#limits").value = $("#urls").value = "";
+    ["references","avatar","sprites","fullbody","sources"].forEach(k => $("#files-" + k).innerHTML = ""); renderOutputs([]);
+    $("#folder").textContent = ""; $("#btnRebuild").disabled = true; return; }
+  const info = await api("/api/talent/" + e.target.value);
+  fill({ name: info.settings.name, ...info.settings }); applyInfo(info); toast("Loaded " + (info.settings.name || info.slug));
+});
+
+async function ensureTalent() {
+  const name = $("#name").value.trim();
+  if (!name) { showErrors(["Enter a name first. It creates the creator's folder."]); $("#name").focus(); throw new Error("no name"); }
+  if (!slug || $("#talentPicker").value !== slug) {
+    const info = await api("/api/talent", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+    const keep = { brief: $("#brief").value, limits: $("#limits").value, urls: $("#urls").value };
+    applyInfo(info);
+    if (keep.brief.trim()) $("#brief").value = keep.brief;
+    if (keep.limits.trim()) $("#limits").value = keep.limits;
+    if (keep.urls.trim()) $("#urls").value = keep.urls;
+    await loadTalents(info.slug);
+  }
+}
+$("#name").addEventListener("change", async () => { if ($("#name").value.trim()) { try { await ensureTalent(); showErrors([]); } catch (e) {} } });
+
+$$(".drop").forEach(drop => {
+  const input = $("input", drop);
+  const send = async files => {
+    try { await ensureTalent(); } catch (e) { return; }
+    for (const f of files) {
+      try { renderFiles(await api(`/api/upload?talent=${slug}&kind=${drop.dataset.kind}&filename=${encodeURIComponent(f.name)}`, { method: "PUT", body: f })); }
+      catch (err) { showErrors([err.message]); }
+    }
+    input.value = ""; toast("Saved to the creator folder");
+  };
+  input.addEventListener("change", () => send([...input.files]));
+  drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+  drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); send([...e.dataTransfer.files]); });
+});
+
+$("#btnSave").addEventListener("click", async () => {
+  try { await ensureTalent(); const j = await api("/api/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(collect()) });
+    showErrors([]); toast("Saved" + (j.saved_env.length ? " (+ .env)" : "")); } catch (e) { if (e.errors) showErrors(e.errors); }
+});
+
+function colour(line) {
+  const esc = line.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  if (/^\s*!/.test(line)) return `<span class="w">${esc}</span>`;
+  if (/^\s*✓/.test(line)) return `<span class="ok">${esc}</span>`;
+  if (/^(ℹ|\$)/.test(line)) return `<span class="i">${esc}</span>`;
+  return esc;
+}
+async function start(kind) {
+  showErrors([]);
+  try { await ensureTalent(); } catch (e) { return; }
+  let j;
+  try { j = await api(kind === "rebuild" ? "/api/rebuild" : "/api/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(collect()) }); }
+  catch (e) { showErrors(e.errors || [e.message]); return; }
+  job = j.job; since = 0; $("#log").innerHTML = ""; renderOutputs([]);
+  $("#btnRun").disabled = $("#btnRebuild").disabled = true; $("#btnCancel").disabled = false;
+  setStatus("running", kind === "rebuild" ? "Rewriting the card…" : "Researching and building… this can take several minutes.");
+  poll();
+}
+function setStatus(cls, text) { const s = $("#status"); s.className = "status " + cls; s.textContent = text; }
+async function poll() {
+  if (!job) return;
+  try {
+    const j = await api(`/api/job/${job}?since=${since}`);
+    if (j.lines.length) {
+      const log = $("#log"); const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
+      log.insertAdjacentHTML("beforeend", j.lines.map(colour).join("\n") + "\n"); since = j.next;
+      if (atBottom) log.scrollTop = log.scrollHeight;
+    }
+    if (j.status === "running") { setStatus("running", `Working… ${Math.floor(j.elapsed / 60)}m ${j.elapsed % 60}s`); pollTimer = setTimeout(poll, 1200); return; }
+    const msg = { done: "Finished. Your files are below and in the creator folder.", failed: "The run stopped. See the last lines of the log; research already done is kept.", cancelled: "Cancelled." }[j.status];
+    setStatus(j.status === "done" ? "done" : "failed", msg);
+    job = null; $("#btnRun").disabled = false; $("#btnCancel").disabled = true;
+    const info = await api("/api/talent/" + slug); applyInfo(info); await loadTalents(slug);
+  } catch (e) { pollTimer = setTimeout(poll, 2500); }
+}
+$("#btnRun").addEventListener("click", () => start("run"));
+$("#btnRebuild").addEventListener("click", () => start("rebuild"));
+$("#btnCancel").addEventListener("click", async () => { if (job) await api(`/api/job/${job}/cancel`, { method: "POST" }); });
+
+applyMode(); loadTalents();
+</script>
+</body>
+</html>

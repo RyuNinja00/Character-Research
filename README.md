@@ -7,6 +7,8 @@ historical figures and well-documented fictional characters.
 
 **New here? Read the step-by-step [MANUAL.md](MANUAL.md).**
 
+**Prefer a form?** Run `python -m persona_forge.webui` for a local web UI with a box and an example for every option. It creates a `talent/<name>/` folder for each creator and keeps everything for that creator in it.
+
 ```
 python -m persona_forge "Ada Lovelace" --era 1843 --push
 ```

@@ -242,8 +242,9 @@ def gather_sources(r: Researcher, args) -> tuple[list[Source], str, str]:
         if q := r.wikiquote(wiki.title):
             log("→ Wikiquote page found")
             sources.append(q)
-    elif not (args.url or args.seed or args.file):
-        raise SystemExit("--talent / --no-wikipedia needs at least one --seed, --url or --file.")
+    elif not (args.url or args.seed or args.file or (args.search_web and not args.no_web)):
+        raise SystemExit("--talent / --no-wikipedia needs at least one --seed, --url or --file "
+                         "(or --search-web / --deep to search the name).")
 
     if args.url:
         user_pages = r.fetch_many([(u, "") for u in args.url], kind="user", keep_html=args.site_pages > 0)
