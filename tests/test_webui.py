@@ -113,6 +113,11 @@ def main():
     check("Ignored “greetings”" in log, "junk number ignored with a note, not an error")
     check("brief is still the empty template" in log, "untouched brief template left out")
     check("sk-secret-123" not in log, "API key never appears in the log")
+    check("--extract-model= " in log or log.rstrip().count("--extract-model=") >= 1,
+          "empty page-reading box sent as empty (a leftover .env value is not used)")
+    check("ℹ Python:" in log and "Finished with exit code 0" in log, "console shows setup and exit code")
+    check("chunks read" in log, "progress lines for the progress bar")
+    check(res.get("log_file", "").startswith("runs/"), "log file link available")
     names = [o["name"] for o in res["outputs"]]
     check("Nova_Test.png" in names and "review.md" in names and "sprite_kit/SPRITE_KIT.md" in names,
           "card, review and sprite kit listed")

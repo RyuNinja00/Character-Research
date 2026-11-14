@@ -287,9 +287,11 @@ def build_command(slug: str, form: dict, rebuild: bool = False) -> tuple[list[st
     if _flag(form, "audience_research") and mode == "talent" and not rebuild and not _flag(form, "no_web"):
         a.append("--audience-research")
 
+    # Page-reading model: an empty box means "same as Model" – a leftover LLM_EXTRACT_MODEL in .env is ignored.
+    a.append("--extract-model=" + _s(form, "extract_model"))
     for key, flag in (("descriptor", "--descriptor"), ("era", "--era"), ("scenario", "--scenario"),
                       ("language", "--language"), ("creator", "--creator"), ("model", "--model"),
-                      ("extract_model", "--extract-model"), ("base_url", "--base-url"),
+                      ("base_url", "--base-url"),
                       ("image_base_url", "--image-base-url"), ("image_model", "--image-model"),
                       ("avatar_style", "--avatar-style"), ("marinara_user", "--marinara-user")):
         if _s(form, key):
@@ -380,6 +382,7 @@ def env_defaults() -> dict:
     return {
         "base_url": vals.get("LLM_BASE_URL", ""), "model": vals.get("LLM_MODEL", ""),
         "extract_model": vals.get("LLM_EXTRACT_MODEL", ""), "image_model": vals.get("IMAGE_MODEL", ""),
+        "image_base_url": vals.get("IMAGE_BASE_URL", ""), "max_tokens": vals.get("LLM_MAX_TOKENS", ""),
         "has_api_key": bool(vals.get("LLM_API_KEY")), "has_image_key": bool(vals.get("IMAGE_API_KEY")),
     }
 
@@ -391,6 +394,9 @@ class Job:
         self.slug = slug
         self.argv = argv
         self.lines: list[str] = [f"ℹ {n}" for n in notes]
+        self.lines += [f"ℹ Creator folder: {talent_dir(slug)}", f"ℹ Working folder: {ROOT}",
+                       f"ℹ Python: {sys.executable} ({sys.version.split()[0]})",
+                       "ℹ Model settings: boxes you filled in override .env; empty boxes use .env"]
         self.status = "running"
         self.code: int | None = None
         self.started = time.time()
@@ -415,6 +421,9 @@ class Job:
                 log.write(line + "\n")
                 log.flush()
             self.code = self.proc.wait()
+            end = f"ℹ Finished with exit code {self.code} after {round(time.time() - self.started)}s"
+            self.lines.append(end)
+            log.write(end + "\n")
         if self.status != "cancelled":
             self.status = "done" if self.code == 0 else "failed"
 
@@ -425,6 +434,8 @@ class Job:
 
     def view(self, since: int) -> dict:
         return {"id": self.id, "slug": self.slug, "status": self.status, "code": self.code,
+                "log_file": str(self.log_path.relative_to(talent_dir(self.slug))),
+                "rebuild": "--from-dossier" in self.argv,
                 "lines": self.lines[since:], "next": len(self.lines),
                 "elapsed": round(time.time() - self.started),
                 "outputs": output_files(talent_dir(self.slug)) if self.status != "running" else []}

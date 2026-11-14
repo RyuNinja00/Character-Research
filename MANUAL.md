@@ -231,8 +231,19 @@ The first start creates the `talent/` folder in the project.
    into the creator's folder.
 4. **Sections 4–7** (optional): chat style, opening premise, AI model, sending to Marinara, advanced limits.
    Leave anything empty to use the default. Empty model boxes use your `.env` values, shown in grey.
-5. Click **Build card**. The log on the right shows progress. When it finishes, the card image and every
-   output file appear under it. Click any file to open it, and start with **review.md**.
+5. Click **Build card**. On the right, a **progress bar** shows the current stage (reading sources, reading
+   pages with the AI, building the profile, deep research rounds, writing the card…). Under it, the
+   **console** shows everything the app does:
+   - **Purple:** the exact command that ran.
+   - **Blue:** setup info, such as the creator folder, Python version, which AI model and provider are
+     in use, and whether an API key is set.
+   - **Yellow:** warnings, such as a skipped page and why.
+   - **Red:** errors.
+
+   Click **Problems** to see only warnings and errors, **Copy** to copy the whole log (useful when asking for
+   help), **Expand** for a taller console, or **Log file** to open the saved log. When the run finishes, the
+   card image and every output file appear below the console. Click any file to open it, and start with
+   **review.md**.
 6. To change the writing without researching again, edit sections 3–6 and click **Rebuild writing
    only**. It takes seconds to a minute.
 
@@ -248,6 +259,11 @@ links and files load automatically.
 - In **Hard limits**, lines still containing a `<placeholder>` are skipped, and the rest are used.
 - If a creator has no link hub, pages, brief or files, web search on the name is switched on automatically,
   so there's always something to read. (With *Offline* ticked you get a clear message instead.)
+- Grey italic text inside a box is only an example. It's never sent to the app.
+- Empty AI-model boxes use your `.env`, and the value in use is shown in green under each box. The one
+  exception is **Page-reading model**: empty means "same as Model", even if `.env` has an `LLM_EXTRACT_MODEL`.
+  If a page-reading model is ever rejected by your provider, the app switches to the main model and says
+  so in the console.
 - API keys and passwords are never saved in the creator folder. Tick **Save these model settings to .env** to
   keep them.
 
@@ -642,6 +658,7 @@ Run `python -m persona_forge --help` for the full list. These are the main optio
 | `The model (…) refused this step` | The model won't write adult content. Set a different `LLM_MODEL` (Part 3.1) and rebuild with the `--from-dossier` command the app printed. Your research is kept. |
 | `LLM request failed (HTTP 401)` | Wrong or missing `LLM_API_KEY`. |
 | `LLM request failed (HTTP 404)` | Wrong `LLM_MODEL` id or `LLM_BASE_URL`. |
+| "Page-reading model … was rejected" | Your `.env` has an `LLM_EXTRACT_MODEL` from a different provider (e.g. `gpt-4o-mini` left over from the OpenAI example while using Featherless). The run continues with the main model. Delete that line from `.env` or set it to a model from your provider. |
 | Errors about `response_format` with a local model | Set `LLM_JSON_MODE=off`. |
 | `--talent needs --consent-note` | Add `--consent-note "..."`. |
 | `Only N facts found` | Not enough material. Add `--deep`, more `--url` pages, or a `--file` brief. Check `review.md` to see what was read and skipped. |

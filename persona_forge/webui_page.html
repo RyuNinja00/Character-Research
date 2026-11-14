@@ -95,7 +95,31 @@
   .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg);
            padding: 8px 14px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; }
   .toast.show { opacity: .95; }
-  [data-modes] { } .hidden { display: none !important; }
+  .hidden { display: none !important; }
+  ::placeholder { color: color-mix(in srgb, var(--muted) 70%, transparent); font-style: italic; }
+  .envnote { font-size: 12px; margin-top: 4px; color: var(--ok); }
+  .envnote:empty { display: none; }
+  .envnote.warn { color: var(--warn); }
+  .progress { height: 10px; background: var(--soft); border: 1px solid var(--line); border-radius: 99px; overflow: hidden; }
+  .progress > div { height: 100%; width: 0; background: var(--accent); transition: width .4s ease; }
+  .progress.done > div { background: var(--ok); } .progress.failed > div { background: var(--bad); }
+  .progress.running > div { background-image: linear-gradient(45deg, rgba(255,255,255,.25) 25%, transparent 25%,
+      transparent 50%, rgba(255,255,255,.25) 50%, rgba(255,255,255,.25) 75%, transparent 75%);
+      background-size: 18px 18px; animation: stripes 1s linear infinite; }
+  @keyframes stripes { to { background-position: 18px 0; } }
+  .stage { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--muted); margin: 6px 0 12px; }
+  .stage b { color: var(--ink); }
+  .console-bar { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
+  .console-bar .title { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-right: auto; }
+  .tab { border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 6px; padding: 3px 9px;
+         font-size: 12px; cursor: pointer; }
+  .tab.on { border-color: var(--accent); color: var(--accent); }
+  .badge { background: var(--bad); color: #fff; border-radius: 99px; padding: 0 6px; font-size: 11px; margin-left: 4px; }
+  .badge:empty { display: none; }
+  pre.log.tall { height: 640px; }
+  pre.log .e { color: #ff8a80; } pre.log .cmd { color: #c5a3ff; } pre.log .dim { color: #8a837a; }
+  pre.log.problems-only > span:not(.w):not(.e) { display: none; }
+  pre.log.problems-only { white-space: pre-line; }
 </style>
 </head>
 <body>
@@ -127,18 +151,18 @@
       <div class="grid2">
         <div class="field">
           <label class="req" for="name">Name</label>
-          <input type="text" id="name" name="name" placeholder="Ivy Wren">
+          <input type="text" id="name" name="name" placeholder="e.g. Ivy Wren">
           <div class="hint">Exactly as they use it, e.g. the stage name. Creates the folder <code>talent/&lt;name&gt;/</code>.</div>
         </div>
         <div class="field">
           <label for="descriptor">Who they are</label>
-          <input type="text" id="descriptor" name="descriptor" placeholder="adult content creator and streamer">
+          <input type="text" id="descriptor" name="descriptor" placeholder="e.g. adult content creator and streamer">
           <div class="hint">A few words that tell them apart from others with the same name.</div>
         </div>
       </div>
       <div class="field" data-modes="talent">
         <label class="req" for="consent_note">Consent note</label>
-        <input type="text" id="consent_note" name="consent_note" placeholder="Authorised by Ivy Wren (release on file), 2026-11-14">
+        <input type="text" id="consent_note" name="consent_note" placeholder="e.g. Authorised by Ivy Wren (release on file), 2026-11-14">
         <div class="hint">Who approved this card and when. Shown at the top of the card's creator notes.</div>
       </div>
       <div class="grid2">
@@ -147,7 +171,7 @@
           <div class="hint">Reads the creator's own adult-platform pages and works out content themes. Minor-coded themes are always excluded.</div></div></div>
         <div class="field">
           <label for="creator">Card creator name</label>
-          <input type="text" id="creator" name="creator" placeholder="Ivy Wren">
+          <input type="text" id="creator" name="creator" placeholder="e.g. Ivy Wren">
           <div class="hint">Shown as the card's creator. Empty = “Persona Forge”.</div>
         </div>
       </div>
@@ -160,24 +184,24 @@
     <div class="body">
       <div class="field" data-modes="public">
         <label for="wiki_title">Exact Wikipedia title</label>
-        <input type="text" id="wiki_title" name="wiki_title" placeholder="Marie Curie">
+        <input type="text" id="wiki_title" name="wiki_title" placeholder="e.g. Marie Curie">
         <div class="hint">Only needed if the name matches several people. Empty = the top match is used.</div>
       </div>
       <div class="grid2">
         <div class="field">
           <label for="seeds">Link-in-bio pages</label>
-          <textarea id="seeds" name="seeds" placeholder="https://linktr.ee/iivywren"></textarea>
+          <textarea id="seeds" name="seeds" placeholder="e.g. https://linktr.ee/iivywren"></textarea>
           <div class="hint">One per line. The app reads it <b>and every page it links to</b>: Linktree, Beacons, AllMyLinks, Carrd…</div>
         </div>
         <div class="field">
           <label for="urls">Extra pages</label>
-          <textarea id="urls" name="urls" placeholder="https://example.com/interview-with-ivy&#10;https://podcast.example.com/ep42"></textarea>
+          <textarea id="urls" name="urls" placeholder="e.g. https://example.com/interview-with-ivy&#10;https://podcast.example.com/ep42"></textarea>
           <div class="hint">One per line: interviews, podcasts, their website, profile or store pages. Saved to <code>urls.txt</code>. A page that won't load (403/404)? Save it from your browser and add it under <b>Text sources</b>.</div>
         </div>
       </div>
       <div class="field" data-modes="talent fictional">
         <label for="handles">Platform usernames</label>
-        <input type="text" id="handles" name="handles" placeholder="ivywrenxo, @ivy_w">
+        <input type="text" id="handles" name="handles" placeholder="e.g. ivywrenxo, @ivy_w">
         <div class="hint">Only if they differ from the stage name. Usernames in the link hub's links are found automatically.</div>
       </div>
       <div class="grid2">
@@ -256,17 +280,17 @@
       <div class="grid3">
         <div class="field">
           <label for="avatar_style">Portrait style</label>
-          <input type="text" id="avatar_style" name="avatar_style" placeholder="digital painting portrait">
+          <input type="text" id="avatar_style" name="avatar_style" placeholder="e.g. digital painting portrait">
           <div class="hint">For the generated portrait, e.g. “anime portrait”.</div>
         </div>
         <div class="field">
           <label for="sprite_expressions">Kit expressions</label>
-          <input type="number" id="sprite_expressions" name="sprite_expressions" placeholder="12" min="1" max="16">
+          <input type="number" id="sprite_expressions" name="sprite_expressions" placeholder="default 12" min="1" max="16">
           <div class="hint">How many expressions the sprite kit plans (1–16).</div>
         </div>
         <div class="field">
           <label for="sprite_poses">Kit full-body poses</label>
-          <input type="number" id="sprite_poses" name="sprite_poses" placeholder="6" min="1" max="16">
+          <input type="number" id="sprite_poses" name="sprite_poses" placeholder="default 6" min="1" max="16">
           <div class="hint">How many full-body poses (1–16).</div>
         </div>
       </div>
@@ -299,28 +323,28 @@
       </div>
       <div class="field">
         <label for="scenario">Opening premise</label>
-        <input type="text" id="scenario" name="scenario" placeholder="{{user}} is a longtime subscriber who finally gets a DM back">
+        <input type="text" id="scenario" name="scenario" placeholder="e.g. {{user}} is a longtime subscriber who finally gets a DM back">
         <div class="hint">Where and how the first chat starts. Empty = the app picks one from their real life.</div>
       </div>
       <div class="grid3">
         <div class="field">
           <label for="era">Portray them as of</label>
-          <input type="text" id="era" name="era" placeholder="2026">
+          <input type="text" id="era" name="era" placeholder="e.g. 2026">
           <div class="hint">A year or period. Later events are left out.</div>
         </div>
         <div class="field">
           <label for="greetings">Alternate greetings</label>
-          <input type="number" id="greetings" name="greetings" placeholder="3" min="0" max="20">
+          <input type="number" id="greetings" name="greetings" placeholder="default 3" min="0" max="20">
           <div class="hint">Extra opening messages (0–20).</div>
         </div>
         <div class="field">
           <label for="lore_entries">Max lorebook entries</label>
-          <input type="number" id="lore_entries" name="lore_entries" placeholder="40" min="1" max="200">
+          <input type="number" id="lore_entries" name="lore_entries" placeholder="default 40" min="1" max="200">
           <div class="hint">People, places, events, themes.</div>
         </div>
         <div class="field">
           <label for="language">Language</label>
-          <input type="text" id="language" name="language" placeholder="English">
+          <input type="text" id="language" name="language" placeholder="e.g. English">
           <div class="hint">The language the card is written in.</div>
         </div>
         <div class="field">
@@ -338,39 +362,39 @@
   <section class="card">
     <h2>5 · AI model</h2>
     <div class="body">
-      <div class="hint" style="margin:6px 0 4px">Empty boxes use the values in <code>.env</code>, shown in grey.</div>
+      <div class="hint" style="margin:6px 0 4px">Grey italic text in a box is only an example and is never used. Empty boxes use your <code>.env</code> values, shown in green under each box.</div>
       <div class="grid2">
         <div class="field">
           <label for="base_url">API base URL</label>
-          <input type="text" id="base_url" name="base_url" placeholder="https://api.featherless.ai/v1">
-          <div class="hint">Any OpenAI-compatible service: Featherless, OpenRouter, a local Ollama…</div>
+          <input type="text" id="base_url" name="base_url" placeholder="e.g. https://api.featherless.ai/v1">
+          <div class="envnote" id="env-base_url"></div><div class="hint">Any OpenAI-compatible service: Featherless, OpenRouter, a local Ollama…</div>
         </div>
         <div class="field">
           <label for="api_key">API key</label>
           <input type="password" id="api_key" name="api_key" placeholder="sk-…">
-          <div class="hint">Never stored in the creator folder. Tick “Save to .env” to keep it.</div>
+          <div class="envnote" id="env-api_key"></div><div class="hint">Never stored in the creator folder. Tick “Save to .env” to keep it.</div>
         </div>
         <div class="field">
           <label for="model">Model</label>
-          <input type="text" id="model" name="model" placeholder="huihui-ai/Huihui-Qwen3.5-27B-abliterated">
-          <div class="hint">Writes the dossier, card and lorebook. For 18+ cards, pick one that allows adult content.</div>
+          <input type="text" id="model" name="model" placeholder="e.g. huihui-ai/Huihui-Qwen3.5-27B-abliterated">
+          <div class="envnote" id="env-model"></div><div class="hint">Writes the dossier, card and lorebook. For 18+ cards, pick one that allows adult content.</div>
         </div>
         <div class="field">
           <label for="extract_model">Page-reading model <span class="muted">(optional)</span></label>
-          <input type="text" id="extract_model" name="extract_model" placeholder="TrevorJS/gemma-4-26B-A4B-it-uncensored">
-          <div class="hint">A cheaper or faster model for reading pages. Empty = same as Model.</div>
+          <input type="text" id="extract_model" name="extract_model" placeholder="e.g. TrevorJS/gemma-4-26B-A4B-it-uncensored">
+          <div class="envnote" id="env-extract_model"></div><div class="hint">A cheaper or faster model <b>from the same provider</b> for reading pages. Empty = same as Model.</div>
         </div>
       </div>
       <div class="grid3">
         <div class="field">
           <label for="workers">Parallel requests</label>
-          <input type="number" id="workers" name="workers" placeholder="4" min="1" max="16">
+          <input type="number" id="workers" name="workers" placeholder="default 4" min="1" max="16">
           <div class="hint">Featherless Chat plan: <b>2</b>. Local models: <b>1</b>.</div>
         </div>
         <div class="field">
           <label for="max_tokens">Max reply tokens</label>
-          <input type="number" id="max_tokens" name="max_tokens" placeholder="8192">
-          <div class="hint">Featherless (32K context): <b>6144</b>.</div>
+          <input type="number" id="max_tokens" name="max_tokens" placeholder="default 8192">
+          <div class="envnote" id="env-max_tokens"></div><div class="hint">Featherless (32K context): <b>6144</b>.</div>
         </div>
         <div class="field">
           <label for="json_mode">JSON mode</label>
@@ -383,18 +407,18 @@
       <div class="grid3">
         <div class="field">
           <label for="image_base_url">Image API URL</label>
-          <input type="text" id="image_base_url" name="image_base_url" placeholder="https://api.openai.com/v1">
-          <div class="hint">Only for “Generate a portrait”.</div>
+          <input type="text" id="image_base_url" name="image_base_url" placeholder="e.g. https://api.openai.com/v1">
+          <div class="envnote" id="env-image_base_url"></div><div class="hint">Only for “Generate a portrait”.</div>
         </div>
         <div class="field">
           <label for="image_api_key">Image API key</label>
           <input type="password" id="image_api_key" name="image_api_key" placeholder="sk-…">
-          <div class="hint">Empty = the AI model's key.</div>
+          <div class="envnote" id="env-image_api_key"></div><div class="hint">Empty = the AI model's key.</div>
         </div>
         <div class="field">
           <label for="image_model">Image model</label>
-          <input type="text" id="image_model" name="image_model" placeholder="gpt-image-1">
-          <div class="hint">Any /images/generations model.</div>
+          <input type="text" id="image_model" name="image_model" placeholder="e.g. gpt-image-1">
+          <div class="envnote" id="env-image_model"></div><div class="hint">Any /images/generations model.</div>
         </div>
       </div>
       <div class="check"><input type="checkbox" id="save_env" name="save_env"><div>
@@ -413,12 +437,12 @@
       <div class="grid3">
         <div class="field">
           <label for="push_url">Marinara address</label>
-          <input type="text" id="push_url" name="push_url" placeholder="http://127.0.0.1:7860">
+          <input type="text" id="push_url" name="push_url" placeholder="default http://127.0.0.1:7860">
           <div class="hint">Empty = this computer, default port.</div>
         </div>
         <div class="field">
           <label for="marinara_user">Login user</label>
-          <input type="text" id="marinara_user" name="marinara_user" placeholder="(only if Marinara has a login)">
+          <input type="text" id="marinara_user" name="marinara_user" placeholder="only if Marinara has a login">
           <div class="hint">Leave empty if there's no login.</div>
         </div>
         <div class="field">
@@ -437,37 +461,37 @@
       <div class="grid3">
         <div class="field">
           <label for="target_coverage">Deep research target</label>
-          <input type="text" id="target_coverage" name="target_coverage" placeholder="85">
+          <input type="text" id="target_coverage" name="target_coverage" placeholder="e.g. 85">
           <div class="hint">Stop when the profile is this % complete.</div>
         </div>
         <div class="field">
           <label for="max_rounds">Deep research rounds</label>
-          <input type="number" id="max_rounds" name="max_rounds" placeholder="4">
+          <input type="number" id="max_rounds" name="max_rounds" placeholder="default 4">
           <div class="hint">The most extra search rounds.</div>
         </div>
         <div class="field">
           <label for="pages_per_round">Pages per round</label>
-          <input type="number" id="pages_per_round" name="pages_per_round" placeholder="10">
+          <input type="number" id="pages_per_round" name="pages_per_round" placeholder="default 10">
           <div class="hint">New pages read in each round.</div>
         </div>
         <div class="field">
           <label for="max_pages">First-pass web pages</label>
-          <input type="number" id="max_pages" name="max_pages" placeholder="12">
+          <input type="number" id="max_pages" name="max_pages" placeholder="default 12">
           <div class="hint">Web pages read before deep research.</div>
         </div>
         <div class="field">
           <label for="site_pages">Sub-pages per own site</label>
-          <input type="number" id="site_pages" name="site_pages" placeholder="5">
+          <input type="number" id="site_pages" name="site_pages" placeholder="default 5">
           <div class="hint">About, FAQ and blog pages on the creator's own websites (0 = off).</div>
         </div>
         <div class="field">
           <label for="seed_max_links">Links per link hub</label>
-          <input type="number" id="seed_max_links" name="seed_max_links" placeholder="25">
+          <input type="number" id="seed_max_links" name="seed_max_links" placeholder="default 25">
           <div class="hint">The most links followed on a Linktree.</div>
         </div>
         <div class="field">
           <label for="seed_depth">Link-hub depth</label>
-          <input type="number" id="seed_depth" name="seed_depth" placeholder="1" min="1" max="3">
+          <input type="number" id="seed_depth" name="seed_depth" placeholder="default 1" min="1" max="3">
           <div class="hint">2 = also crawl hubs linked from the hub.</div>
         </div>
         <div class="field">
@@ -481,17 +505,17 @@
         </div>
         <div class="field">
           <label for="audience_pages">Audience report pages</label>
-          <input type="number" id="audience_pages" name="audience_pages" placeholder="20">
+          <input type="number" id="audience_pages" name="audience_pages" placeholder="default 20">
           <div class="hint">Discussion pages read for the audience report.</div>
         </div>
         <div class="field">
           <label for="scan_depth">Lorebook scan depth</label>
-          <input type="number" id="scan_depth" name="scan_depth" placeholder="3">
+          <input type="number" id="scan_depth" name="scan_depth" placeholder="default 3">
           <div class="hint">Recent messages checked for lorebook keywords.</div>
         </div>
         <div class="field">
           <label for="token_budget">Lorebook token budget</label>
-          <input type="number" id="token_budget" name="token_budget" placeholder="2048">
+          <input type="number" id="token_budget" name="token_budget" placeholder="default 2048">
           <div class="hint">The most lorebook text added per reply.</div>
         </div>
       </div>
@@ -524,7 +548,18 @@
     </div>
     <div class="hint" style="margin-bottom:6px"><b>Build card</b> researches and writes everything. <b>Rebuild writing only</b> rewrites the card from saved research, with any changes to sections 3–6.</div>
     <div class="status" id="status">Fill in a name to start. Every box except those marked * is optional.</div>
+    <div class="progress" id="progress"><div></div></div>
+    <div class="stage"><span id="stage">Waiting to start</span><b id="pct"></b></div>
+    <div class="console-bar">
+      <span class="title">Console</span>
+      <button type="button" class="tab on" id="fAll">All</button>
+      <button type="button" class="tab" id="fProb">Problems<span class="badge" id="probCount"></span></button>
+      <button type="button" class="tab" id="cCopy" title="Copy the whole log">Copy</button>
+      <button type="button" class="tab" id="cSize" title="Bigger / smaller">Expand</button>
+      <a class="tab" id="cFile" target="_blank" style="text-decoration:none" title="The saved log file">Log file</a>
+    </div>
     <pre class="log" id="log"></pre>
+    <div class="hint">Purple = the command that ran · blue = setup info · yellow = warnings · red = errors. Every run is also saved in the creator's <code>runs/</code> folder.</div>
     <div class="outputs" id="outputs"></div>
     <div class="folder" id="folder"></div>
   </div>
@@ -612,13 +647,15 @@ async function loadTalents(select) {
   const p = $("#talentPicker"); p.length = 1;
   j.talents.forEach(t => p.add(new Option(t.name + (t.has_output ? "  ✓" : ""), t.slug)));
   if (select) p.value = select;
-  const e = j.env;
-  if (e.base_url) $("#base_url").placeholder = e.base_url + "  (from .env)";
-  if (e.model) $("#model").placeholder = e.model + "  (from .env)";
-  if (e.extract_model) $("#extract_model").placeholder = e.extract_model + "  (from .env)";
-  if (e.image_model) $("#image_model").placeholder = e.image_model + "  (from .env)";
-  if (e.has_api_key) $("#api_key").placeholder = "saved in .env";
-  if (e.has_image_key) $("#image_api_key").placeholder = "saved in .env";
+  const e = j.env, note = (id, text, warn) => { const el = $("#env-" + id); el.textContent = text || ""; el.classList.toggle("warn", !!warn); };
+  note("base_url", e.base_url ? "If empty, uses your .env: " + e.base_url : "Not set in .env: fill this in (or the run uses OpenAI).", !e.base_url);
+  note("model", e.model ? "If empty, uses your .env: " + e.model : "Not set in .env: fill this in.", !e.model);
+  note("extract_model", e.extract_model ? `Your .env has LLM_EXTRACT_MODEL=${e.extract_model}. The web UI ignores it; type a model here to use one.` : "", true);
+  note("api_key", e.has_api_key ? "If empty, uses the key saved in your .env." : "No key in .env: paste one (local servers don't need one).", !e.has_api_key);
+  note("image_api_key", e.has_image_key ? "If empty, uses the image key in your .env." : "");
+  note("image_base_url", e.image_base_url ? "If empty, uses your .env: " + e.image_base_url : "");
+  note("image_model", e.image_model ? "If empty, uses your .env: " + e.image_model : "");
+  note("max_tokens", e.max_tokens ? "If empty, uses your .env: " + e.max_tokens : "");
 }
 $("#talentPicker").addEventListener("change", async e => {
   if (!e.target.value) { form.reset(); slug = ""; applyMode(); $("#brief").value = $("#limits").value = $("#urls").value = "";
@@ -664,13 +701,54 @@ $("#btnSave").addEventListener("click", async () => {
     showErrors([]); toast("Saved" + (j.saved_env.length ? " (+ .env)" : "")); } catch (e) { if (e.errors) showErrors(e.errors); }
 });
 
+let problems = 0, allText = [];
+const ERR = /(Traceback \(most recent|^\s*File "|Error:|Exception|failed|refused|^SystemExit|HTTP [45]\d\d.*model|exit code [1-9])/i;
 function colour(line) {
+  allText.push(line);
   const esc = line.replace(/&/g, "&amp;").replace(/</g, "&lt;");
-  if (/^\s*!/.test(line)) return `<span class="w">${esc}</span>`;
-  if (/^\s*✓/.test(line)) return `<span class="ok">${esc}</span>`;
-  if (/^(ℹ|\$)/.test(line)) return `<span class="i">${esc}</span>`;
-  return esc;
+  let cls = "";
+  if (/^\$ /.test(line)) cls = "cmd";
+  else if (/^ℹ/.test(line)) cls = "i";
+  else if (/^\s*✓/.test(line)) cls = "ok";
+  else if (/^\s*!/.test(line) && !ERR.test(line)) cls = "w";
+  else if (ERR.test(line) || /^\s*!/.test(line)) cls = "e";
+  else if (/^\s*(…|·)/.test(line)) cls = "dim";
+  if (cls === "w" || cls === "e") problems++;
+  return `<span class="${cls}">${esc}</span>`;
 }
+
+// Progress: the app logs each stage; map them to a percentage and a plain-English label.
+const STAGES = [
+  [/Reusing settings|Creator source|Link hub|Wikipedia:|Loaded \d+\/\d+ pages|Following|Adult-platform|Reading \d+ web pages|Handles found/, 8, "Reading the sources"],
+  [/Extracting facts from/, 18, "Reading pages with the AI"],
+  [/Conglomerating/, 46, "Building the profile"],
+  [/Profile coverage/, 52, "Checking what's missing"],
+  [/Research saved/, 74, "Research saved"],
+  [/Audience research/, 76, "Audience report"],
+  [/Writing character card/, 80, "Writing the card"],
+  [/Writing lorebook/, 88, "Writing the lorebook"],
+  [/Building sprite kit/, 94, "Building the sprite kit"],
+  [/Importing into Marinara/, 97, "Sending to Marinara"],
+  [/✓ .*written to/, 98, "Saving files"],
+];
+let pct = 0, stageText = "";
+function progressFrom(line) {
+  for (const [re, p, label] of STAGES) if (re.test(line) && p >= pct) { pct = p; stageText = label; }
+  const chunks = line.match(/(\d+)\/(\d+) chunks read/);
+  if (chunks) { const base = pct >= 52 ? pct : 18, span = pct >= 52 ? 4 : 27;
+    pct = Math.max(pct, Math.round(base + span * (+chunks[1] / +chunks[2]))); stageText = stageText || "Reading pages with the AI"; }
+  const round = line.match(/Gap-fill round (\d+)/);
+  if (round) { pct = Math.max(pct, Math.min(72, 52 + 5 * +round[1])); stageText = "Deep research, round " + round[1]; }
+}
+function setProgress(state) {
+  const bar = $("#progress"); bar.className = "progress " + (state || "");
+  $("#progress > div").style.width = pct + "%"; $("#pct").textContent = pct ? pct + "%" : "";
+  $("#stage").textContent = stageText || "Waiting to start";
+}
+$("#fAll").onclick = () => { $("#log").classList.remove("problems-only"); $("#fAll").classList.add("on"); $("#fProb").classList.remove("on"); };
+$("#fProb").onclick = () => { $("#log").classList.add("problems-only"); $("#fProb").classList.add("on"); $("#fAll").classList.remove("on"); };
+$("#cCopy").onclick = async () => { try { await navigator.clipboard.writeText(allText.join("\n")); toast("Log copied"); } catch (e) { toast("Select the log and copy it"); } };
+$("#cSize").onclick = () => { const l = $("#log"); l.classList.toggle("tall"); $("#cSize").textContent = l.classList.contains("tall") ? "Shrink" : "Expand"; };
 async function start(kind) {
   showErrors([]);
   try { await ensureTalent(); } catch (e) { return; }
@@ -678,6 +756,8 @@ async function start(kind) {
   try { j = await api(kind === "rebuild" ? "/api/rebuild" : "/api/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(collect()) }); }
   catch (e) { showErrors(e.errors || [e.message]); return; }
   job = j.job; since = 0; $("#log").innerHTML = ""; renderOutputs([]);
+  problems = 0; allText = []; $("#probCount").textContent = ""; $("#cFile").removeAttribute("href");
+  pct = kind === "rebuild" ? 70 : 2; stageText = kind === "rebuild" ? "Rewriting from saved research" : "Starting"; setProgress("running");
   $("#btnRun").disabled = $("#btnRebuild").disabled = true; $("#btnCancel").disabled = false;
   setStatus("running", kind === "rebuild" ? "Rewriting the card…" : "Researching and building… this can take several minutes.");
   poll();
@@ -690,9 +770,14 @@ async function poll() {
     if (j.lines.length) {
       const log = $("#log"); const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
       log.insertAdjacentHTML("beforeend", j.lines.map(colour).join("\n") + "\n"); since = j.next;
+      j.lines.forEach(progressFrom);
       if (atBottom) log.scrollTop = log.scrollHeight;
+      $("#probCount").textContent = problems || "";
     }
-    if (j.status === "running") { setStatus("running", `Working… ${Math.floor(j.elapsed / 60)}m ${j.elapsed % 60}s`); pollTimer = setTimeout(poll, 1200); return; }
+    if (j.log_file) $("#cFile").href = `/files/${slug}/${j.log_file}`;
+    if (j.status === "running") { setStatus("running", `Working… ${Math.floor(j.elapsed / 60)}m ${j.elapsed % 60}s`); setProgress("running"); pollTimer = setTimeout(poll, 1200); return; }
+    if (j.status === "done") { pct = 100; stageText = "Done"; setProgress("done"); }
+    else { stageText = j.status === "cancelled" ? "Cancelled" : `Stopped at: ${stageText || "start"}. Check Problems in the console.`; setProgress("failed"); }
     const msg = { done: "Finished. Your files are below and in the creator folder.", failed: "The run stopped. See the last lines of the log; research already done is kept.", cancelled: "Cancelled." }[j.status];
     setStatus(j.status === "done" ? "done" : "failed", msg);
     job = null; $("#btnRun").disabled = false; $("#btnCancel").disabled = true;

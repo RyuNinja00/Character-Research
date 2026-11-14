@@ -50,7 +50,10 @@ def load_dotenv(path: Path) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    env = os.environ.get
+    def env(key: str, default: str = "") -> str:
+        """A .env / environment value; an empty one (KEY=) counts as not set."""
+        return (os.environ.get(key) or "").strip() or default
+
     p = argparse.ArgumentParser(
         prog="persona-forge",
         description="Research a public, historical or fictional figure on the web and build a Marinara Engine "
@@ -473,10 +476,14 @@ def main(argv: list[str] | None = None) -> int:
         LLMConfig(args.base_url, args.api_key, args.model, max_tokens=args.max_tokens, json_mode=args.json_mode), cache
     )
     extract_llm = (
-        LLMClient(LLMConfig(args.base_url, args.api_key, args.extract_model, max_tokens=4096, json_mode=args.json_mode), cache)
-        if args.extract_model
+        LLMClient(LLMConfig(args.base_url, args.api_key, args.extract_model, max_tokens=min(4096, args.max_tokens),
+                            json_mode=args.json_mode), cache, fallback_model=args.model)
+        if args.extract_model and args.extract_model != args.model
         else main_llm
     )
+    log(f"→ AI: {args.base_url}  ·  model {args.model}"
+        + (f"  ·  page-reading model {args.extract_model}" if extract_llm is not main_llm else "")
+        + f"  ·  API key {'set' if args.api_key else 'NOT set'}  ·  {args.workers} parallel")
 
     opts = Options(
         name=args.name or "",

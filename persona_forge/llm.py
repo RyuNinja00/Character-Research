@@ -10,7 +10,7 @@ from typing import Any
 
 import requests
 
-from .util import DiskCache, debug, parse_json_loose
+from .util import DiskCache, debug, log, parse_json_loose
 
 
 @dataclass
@@ -29,8 +29,9 @@ class LLMError(RuntimeError):
 
 
 class LLMClient:
-    def __init__(self, cfg: LLMConfig, cache: DiskCache | None = None):
+    def __init__(self, cfg: LLMConfig, cache: DiskCache | None = None, fallback_model: str = ""):
         self.cfg = cfg
+        self.fallback_model = fallback_model
         self.cache = cache
         self._json_mode_supported = cfg.json_mode != "off"
         self._tokens_param = "max_tokens"      # newer OpenAI models want max_completion_tokens
@@ -91,6 +92,15 @@ class LLMClient:
                 last_err = e
                 time.sleep(2 * (attempt + 1))
                 continue
+            if resp.status_code in (400, 404, 422) and self.fallback_model and self.cfg.model != self.fallback_model:
+                err = resp.text.lower()
+                if "model" in err and any(w in err for w in ("not found", "invalid", "does not exist", "unknown",
+                                                             "not exist", "unsupported", "no such", "not available")):
+                    log(f"  ! The page-reading model “{self.cfg.model}” was rejected by the provider – using the main "
+                        f"model “{self.fallback_model}” instead. (Check LLM_EXTRACT_MODEL in .env.)")
+                    self.cfg.model = self.fallback_model
+                    payload = build_payload()
+                    continue
             if resp.status_code == 400:
                 err = resp.text.lower()
                 if "max_tokens" in err and self._tokens_param == "max_tokens":
@@ -115,7 +125,10 @@ class LLMClient:
                 last_err = LLMError(f"HTTP {resp.status_code}: {resp.text[:300]}")
                 continue
             if resp.status_code >= 400:
-                raise LLMError(f"LLM request failed (HTTP {resp.status_code}): {resp.text[:500]}")
+                hint = {401: " – check the API key", 403: " – the key isn't allowed to use this model",
+                        404: " – check the base URL and the model name"}.get(resp.status_code, "")
+                raise LLMError(f"LLM request failed (HTTP {resp.status_code}{hint}) for model “{self.cfg.model}”: "
+                               f"{resp.text[:400]}")
             data = resp.json()
             try:
                 content = data["choices"][0]["message"]["content"] or ""

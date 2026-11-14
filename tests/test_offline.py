@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -105,6 +106,14 @@ class FakeLLM(BaseHTTPRequestHandler):
             png = marinara.placeholder_avatar("gen", 32, 48)
             data = json.dumps({"data": [{"b64_json": base64.b64encode(png).decode()}]}).encode()
             self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        if body.get("model") == "bad-extract":  # e.g. an OpenAI model name sent to Featherless
+            data = json.dumps({"error": {"message": "The model `bad-extract` does not exist"}}).encode()
+            self.send_response(404)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
@@ -530,6 +539,19 @@ def main():
             raise AssertionError("audience research without --talent should exit")
         except SystemExit as e:
             check("--talent" in str(e), "--audience-research requires --talent")
+        # ── A page-reading model the provider doesn't know falls back to the main model
+        fb = io.StringIO()
+        with contextlib.redirect_stderr(fb):
+            rc = cli.main(["Ada Lovelace", "--yes", "--no-web", "--base-url", llm_url, "--model", "fake",
+                           "--extract-model", "bad-extract", "--out", tmp, "--no-cache"])
+        check(rc == 0 and "was rejected by the provider" in fb.getvalue(), "invalid page-reading model → main model used")
+        check("page-reading model bad-extract" in fb.getvalue() and "API key" in fb.getvalue(),
+              "effective AI setup printed at the start of the run")
+        os.environ["LLM_MAX_TOKENS"] = ""
+        os.environ["LLM_MODEL"] = ""
+        check(cli.build_parser().parse_args(["x"]).model == "gpt-4o-mini", "empty .env values count as not set")
+        del os.environ["LLM_MAX_TOKENS"], os.environ["LLM_MODEL"]
+
         # ── Page reader: browser headers, retry, no failure caching, no sub-pages on third-party sites
         from persona_forge.research import Researcher as R2, normalize_url
         from persona_forge.util import DiskCache

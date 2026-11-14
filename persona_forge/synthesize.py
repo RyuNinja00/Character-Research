@@ -161,15 +161,24 @@ def extract_facts(llm: LLMClient, sources: list[Source], opts: Options) -> tuple
     log(f"→ Extracting facts from {len(sources)} sources ({len(jobs)} chunks)…")
     system = _extract_system(opts)
 
+    import threading
+
+    lock = threading.Lock()
+    done = [0]
+
     def run(job: tuple[Source, str, int, int]) -> tuple[Source, dict]:
         src, ch, i, n = job
         label = "CREATOR BRIEF (authoritative, supplied by the creator's team)" if src.kind == "brief" else src.title
         user = f"SOURCE: {label}\nURL: {src.url}\nPART {i}/{n}\n\n{ch}"
         try:
-            return src, llm.chat_json(system, user, temperature=0.1, max_tokens=4096)
+            result = src, llm.chat_json(system, user, temperature=0.1, max_tokens=4096)
         except Exception as e:  # noqa: BLE001
             log(f"  ! extraction failed for {src.url} part {i}: {e}")
-            return src, {}
+            result = src, {}
+        with lock:
+            done[0] += 1
+            log(f"  … {done[0]}/{len(jobs)} chunks read")
+        return result
 
     with ThreadPoolExecutor(max_workers=max(1, opts.workers)) as pool:
         results = list(pool.map(run, jobs))
