@@ -1,0 +1,628 @@
+"""Web research: Wikipedia anchor article, Wikiquote, web search, page fetching + text extraction."""
+
+from __future__ import annotations
+
+import re
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
+from typing import Iterable
+from urllib.parse import parse_qs, quote, unquote, urlparse
+
+import requests
+
+from .util import DiskCache, collapse_ws, debug, log
+
+USER_AGENT = (
+    "PersonaForge/1.0 (Marinara Engine character builder; "
+    "+https://github.com/Pasta-Devs/Marinara-Engine) python-requests"
+)
+BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+)
+
+# Never read: people-search / records aggregators (doxxing risk), whatever the source of the link.
+PEOPLE_SEARCH_DOMAINS = {
+    "spokeo.com", "whitepages.com", "beenverified.com", "truepeoplesearch.com", "fastpeoplesearch.com",
+    "radaris.com", "mylife.com", "peoplefinders.com", "intelius.com", "zoominfo.com", "rocketreach.co",
+    "familysearch.org", "ancestry.com", "findagrave.com", "thatsthem.com", "usphonebook.com",
+    "clustrmaps.com", "nuwber.com", "idcrawl.com", "pimeyes.com", "facecheck.id",
+}
+# Login-walled or text-poor: skipped when they come from web search, but still tried when YOU supply
+# the link (or it is on the creator's link hub), since public bios/meta descriptions are often readable.
+LOGIN_WALLED_DOMAINS = {
+    "facebook.com", "instagram.com", "x.com", "twitter.com", "tiktok.com", "linkedin.com", "pinterest.com",
+    "threads.net", "onlyfans.com", "fansly.com", "patreon.com", "snapchat.com",
+}
+BLOCKED_DOMAINS = PEOPLE_SEARCH_DOMAINS | LOGIN_WALLED_DOMAINS  # kept for backwards compatibility
+# Leak/piracy pages host non-consensual reposts and are never used.
+LEAK_URL_RE = re.compile(r"leak|leaked|nudostar|thothub|fapello|coomer|kemono|erome|simpcity", re.I)
+# Link-hub entries that are never worth reading as text.
+HUB_SKIP_RE = re.compile(
+    r"(apps\.apple\.com|play\.google\.com|paypal\.|cash\.app|venmo\.|ko-fi\.com/.*/shop|amazon\.[a-z.]+/.*wishlist|"
+    r"throne\.com|wishtender|spotify\.com/track|linktr\.ee/(s|privacy|terms|discover)|/cookie|/privacy|/terms)",
+    re.I,
+)
+LINK_HUB_DOMAINS = {"linktr.ee", "beacons.ai", "allmylinks.com", "lnk.bio", "solo.to", "bio.link", "hoo.be",
+                    "carrd.co", "campsite.bio", "tap.bio", "snipfeed.co", "msha.ke", "linkin.bio", "fanlink.to"}
+# Adult platforms where a creator runs their own profile / storefront. A page on these counts as the
+# creator's own channel only if its URL path contains one of the creator's handles (see is_creator_profile).
+# Tube "video" pages uploaded by others, aggregators and leak sites are never treated as the creator's own.
+ADULT_PLATFORMS: dict[str, str] = {
+    "onlyfans.com": "",
+    "fansly.com": "",
+    "manyvids.com": "Profile",
+    "clips4sale.com": "studio",
+    "iwantclips.com": "store",
+    "loyalfans.com": "",
+    "fancentro.com": "",
+    "justfor.fans": "",
+    "pornhub.com": "model",        # verified model / pornstar pages only, not video pages
+    "modelhub.com": "",
+    "chaturbate.com": "",
+    "stripchat.com": "",
+    "myfreecams.com": "",
+    "camsoda.com": "",
+    "bongacams.com": "",
+    "fanvue.com": "",
+}
+ADULT_PRESS_QUERIES = ['"{name}" XBIZ OR AVN interview', '"{name}" adult creator interview']
+SITE_PAGE_HINTS = re.compile(r"about|bio|faq|interview|press|story|blog|journal|meet|who|me\b|q-?and-?a|podcast", re.I)
+SKIP_EXTENSIONS = (".pdf", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".mp4", ".mp3", ".zip")
+
+
+@dataclass
+class Source:
+    url: str
+    title: str
+    text: str
+    kind: str = "web"  # wikipedia | wikiquote | web | user
+    meta: dict = field(default_factory=dict)
+
+
+@dataclass
+class WikiCandidate:
+    title: str
+    snippet: str
+    description: str = ""
+
+
+class Researcher:
+    def __init__(
+        self,
+        cache: DiskCache | None = None,
+        lang: str = "en",
+        search_provider: str = "auto",
+        searxng_url: str = "",
+        brave_key: str = "",
+        tavily_key: str = "",
+        timeout: int = 20,
+        max_page_chars: int = 60_000,
+    ):
+        self.cache = cache
+        self.lang = lang
+        self.search_provider = search_provider
+        self.searxng_url = searxng_url
+        self.brave_key = brave_key
+        self.tavily_key = tavily_key
+        self.timeout = timeout
+        self.max_page_chars = max_page_chars
+        self.http = requests.Session()
+        self.http.headers["User-Agent"] = USER_AGENT
+        self.skipped: list[tuple[str, str]] = []  # (url, reason) – reported in review.md
+
+    # ───────────────────────────────────────────── Wikipedia / Wikiquote
+    def _wiki_api(self, site: str, params: dict) -> dict:
+        url = f"https://{self.lang}.{site}.org/w/api.php"
+        params = {"format": "json", "formatversion": "2", **params}
+        key = url + "?" + "&".join(f"{k}={v}" for k, v in sorted(params.items()))
+        if self.cache and (hit := self.cache.get("wiki", key)) is not None:
+            return hit
+        resp = self.http.get(url, params=params, timeout=self.timeout)
+        resp.raise_for_status()
+        data = resp.json()
+        if self.cache:
+            self.cache.set("wiki", key, data)
+        return data
+
+    def wiki_candidates(self, name: str, limit: int = 6) -> list[WikiCandidate]:
+        data = self._wiki_api(
+            "wikipedia",
+            {"action": "query", "list": "search", "srsearch": name, "srlimit": str(limit)},
+        )
+        hits = data.get("query", {}).get("search", [])
+        titles = [h["title"] for h in hits]
+        descs: dict[str, str] = {}
+        if titles:
+            d = self._wiki_api(
+                "wikipedia",
+                {"action": "query", "prop": "description", "titles": "|".join(titles)},
+            )
+            for p in d.get("query", {}).get("pages", []):
+                descs[p.get("title", "")] = p.get("description", "")
+        out = []
+        for h in hits:
+            snippet = re.sub(r"<[^>]+>", "", h.get("snippet", ""))
+            out.append(WikiCandidate(h["title"], snippet, descs.get(h["title"], "")))
+        return out
+
+    def wikipedia_article(self, title: str) -> Source | None:
+        data = self._wiki_api(
+            "wikipedia",
+            {
+                "action": "query",
+                "prop": "extracts|description|pageprops|info",
+                "explaintext": "1",
+                "redirects": "1",
+                "inprop": "url",
+                "titles": title,
+            },
+        )
+        pages = data.get("query", {}).get("pages", [])
+        if not pages or pages[0].get("missing"):
+            return None
+        page = pages[0]
+        if "disambiguation" in (page.get("pageprops") or {}):
+            raise ValueError(
+                f'"{page["title"]}" is a disambiguation page. Re-run with --wiki-title set to the exact article.'
+            )
+        text = page.get("extract", "")
+        # Drop reference-style tail sections
+        text = re.split(r"\n==+\s*(References|External links|Further reading|Notes|Sources|Bibliography)\s*==+", text)[0]
+        text = re.sub(r"\n(==+)\s*(.+?)\s*\1", lambda m: f"\n\n## {m.group(2)}\n", text)
+        return Source(
+            url=page.get("fullurl") or f"https://{self.lang}.wikipedia.org/wiki/{quote(page['title'])}",
+            title=page["title"],
+            text=collapse_ws(text)[: self.max_page_chars * 2],
+            kind="wikipedia",
+            meta={
+                "description": page.get("description", ""),
+                "wikibase_item": (page.get("pageprops") or {}).get("wikibase_item", ""),
+            },
+        )
+
+    def wikiquote(self, title: str) -> Source | None:
+        try:
+            data = self._wiki_api(
+                "wikiquote",
+                {
+                    "action": "query",
+                    "prop": "extracts|info",
+                    "explaintext": "1",
+                    "redirects": "1",
+                    "inprop": "url",
+                    "titles": title,
+                },
+            )
+        except requests.RequestException:
+            return None
+        pages = data.get("query", {}).get("pages", [])
+        if not pages or pages[0].get("missing") or not pages[0].get("extract"):
+            return None
+        text = re.split(r"\n==+\s*(Quotes about|External links|See also)", pages[0]["extract"])[0]
+        return Source(
+            url=pages[0].get("fullurl", ""),
+            title=f"{pages[0]['title']} (Wikiquote)",
+            text=collapse_ws(text)[:30_000],
+            kind="wikiquote",
+        )
+
+    # ───────────────────────────────────────────── Web search
+    def search(self, query: str, max_results: int = 8) -> list[tuple[str, str]]:
+        """Returns [(url, title)]."""
+        cache_key = f"{self.search_provider}|{query}|{max_results}"
+        if self.cache and (hit := self.cache.get("search", cache_key)) is not None:
+            return [tuple(x) for x in hit]
+        provider = self.search_provider
+        if provider == "auto":
+            if self.tavily_key:
+                provider = "tavily"
+            elif self.brave_key:
+                provider = "brave"
+            elif self.searxng_url:
+                provider = "searxng"
+            else:
+                provider = "ddg"
+        try:
+            results = getattr(self, f"_search_{provider}")(query, max_results)
+        except AttributeError:
+            raise ValueError(f"Unknown search provider: {provider}")
+        except Exception as e:  # noqa: BLE001 – a search failure shouldn't kill the run
+            log(f"  ! search failed ({provider}): {e}")
+            results = []
+        if self.cache and results:
+            self.cache.set("search", cache_key, results)
+        return results
+
+    def _search_ddg(self, query: str, n: int) -> list[tuple[str, str]]:
+        try:  # prefer the maintained library if installed
+            from ddgs import DDGS  # type: ignore
+
+            with DDGS() as ddgs:
+                return [(r["href"], r.get("title", "")) for r in ddgs.text(query, max_results=n)]
+        except ImportError:
+            pass
+        try:
+            from duckduckgo_search import DDGS  # type: ignore
+
+            with DDGS() as ddgs:
+                return [(r["href"], r.get("title", "")) for r in ddgs.text(query, max_results=n)]
+        except ImportError:
+            pass
+        # Fallback: DuckDuckGo's HTML endpoint
+        from bs4 import BeautifulSoup
+
+        resp = self.http.post(
+            "https://html.duckduckgo.com/html/",
+            data={"q": query},
+            headers={"User-Agent": BROWSER_UA},
+            timeout=self.timeout,
+        )
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        out = []
+        for a in soup.select("a.result__a"):
+            href = a.get("href", "")
+            if "uddg=" in href:
+                href = unquote(parse_qs(urlparse(href).query).get("uddg", [href])[0])
+            if href.startswith("http"):
+                out.append((href, a.get_text(" ", strip=True)))
+            if len(out) >= n:
+                break
+        time.sleep(1.0)  # be polite to the HTML endpoint
+        return out
+
+    def _search_searxng(self, query: str, n: int) -> list[tuple[str, str]]:
+        resp = self.http.get(
+            self.searxng_url.rstrip("/") + "/search",
+            params={"q": query, "format": "json"},
+            timeout=self.timeout,
+        )
+        resp.raise_for_status()
+        return [(r["url"], r.get("title", "")) for r in resp.json().get("results", [])[:n]]
+
+    def _search_brave(self, query: str, n: int) -> list[tuple[str, str]]:
+        resp = self.http.get(
+            "https://api.search.brave.com/res/v1/web/search",
+            params={"q": query, "count": n},
+            headers={"X-Subscription-Token": self.brave_key, "Accept": "application/json"},
+            timeout=self.timeout,
+        )
+        resp.raise_for_status()
+        return [(r["url"], r.get("title", "")) for r in resp.json().get("web", {}).get("results", [])[:n]]
+
+    def _search_tavily(self, query: str, n: int) -> list[tuple[str, str]]:
+        resp = self.http.post(
+            "https://api.tavily.com/search",
+            json={"api_key": self.tavily_key, "query": query, "max_results": n},
+            timeout=self.timeout,
+        )
+        resp.raise_for_status()
+        return [(r["url"], r.get("title", "")) for r in resp.json().get("results", [])[:n]]
+
+    def _search_none(self, query: str, n: int) -> list[tuple[str, str]]:
+        return []
+
+    # ───────────────────────────────────────────── Fetch + extract
+    @staticmethod
+    def _domain(url: str) -> str:
+        host = urlparse(url).netloc.lower()
+        return host[4:] if host.startswith("www.") else host
+
+    @staticmethod
+    def _in(dom: str, domains: set[str]) -> bool:
+        return any(dom == b or dom.endswith("." + b) for b in domains)
+
+    def allowed_url(self, url: str, user_supplied: bool = False) -> bool:
+        if not url.startswith(("http://", "https://")):
+            return False
+        dom = self._domain(url)
+        if self._in(dom, PEOPLE_SEARCH_DOMAINS) or LEAK_URL_RE.search(url):
+            return False
+        if not user_supplied and self._in(dom, LOGIN_WALLED_DOMAINS):
+            return False
+        if urlparse(url).path.lower().endswith(SKIP_EXTENSIONS):
+            return False
+        return True
+
+    def _skip(self, url: str, reason: str) -> None:
+        self.skipped.append((url, reason))
+
+    def fetch(self, url: str, title: str = "", kind: str = "web", keep_html: bool = False) -> Source | None:
+        user_supplied = kind in ("user", "hub", "platform")
+        keep_html = keep_html or kind == "hub"
+        if not self.allowed_url(url, user_supplied=user_supplied):
+            dom = self._domain(url)
+            reason = ("people-search / records site" if self._in(dom, PEOPLE_SEARCH_DOMAINS)
+                      else "leak / repost site" if LEAK_URL_RE.search(url)
+                      else "social site found by search (pass it with --url to read it)"
+                      if self._in(dom, LOGIN_WALLED_DOMAINS) else "unsupported link")
+            self._skip(url, reason)
+            log(f"  ! skipped {url} ({reason})")
+            return None
+        if self.cache and (hit := self.cache.get("page", url)) is not None:
+            if hit and (not keep_html or hit.get("meta", {}).get("html")):
+                return Source(**hit)
+            if not hit:
+                return None
+        src = None
+        try:
+            resp = self.http.get(url, headers={"User-Agent": BROWSER_UA}, timeout=self.timeout)
+            ctype = resp.headers.get("content-type", "")
+            if resp.status_code < 400 and "html" in ctype:
+                text, page_title = extract_main_text(resp.text, url)
+                meta = extract_meta(resp.text)
+                if user_supplied and meta and meta not in text:
+                    text = f"[Profile/meta description] {meta}\n\n{text}"
+                # Pages you chose are kept even if short (a social bio can be one line).
+                if len(text) > (60 if user_supplied else 400):
+                    src = Source(url=url, title=title or page_title or url, text=text[: self.max_page_chars],
+                                 kind=kind, meta={"html": resp.text[:400_000]} if keep_html else {})
+                else:
+                    self._skip(url, "almost no readable text (login wall or JS-only) – paste it into a --file")
+                    log(f"  ! {url}: almost no readable text (login wall or JS-only page). "
+                        "Copy the text into a file and pass it with --file instead.")
+            else:
+                self._skip(url, f"HTTP {resp.status_code}" + ("" if "html" in ctype or resp.status_code >= 400 else f" ({ctype})"))
+                log(f"  ! {url}: HTTP {resp.status_code} – skipped")
+        except requests.RequestException as e:
+            self._skip(url, f"fetch failed ({e.__class__.__name__})")
+            log(f"  ! {url}: fetch failed ({e.__class__.__name__})")
+        if self.cache:
+            cached = dict(src.__dict__) if src else {}
+            self.cache.set("page", url, cached)
+        return src
+
+    def fetch_many(self, items: Iterable[tuple[str, str]], workers: int = 6, kind: str = "web",
+                   keep_html: bool = False) -> list[Source]:
+        items = list(items)
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+            results = list(pool.map(lambda it: self.fetch(it[0], it[1], kind, keep_html), items))
+        return [r for r in results if r]
+
+    # ───────────────────────────────────────────── Adult-platform profiles (creator's own)
+    def is_creator_profile(self, url: str, handles: list[str]) -> bool:
+        dom = self._domain(url)
+        plat = next((p for p in ADULT_PLATFORMS if dom == p or dom.endswith("." + p)), None)
+        if not plat or LEAK_URL_RE.search(url):
+            return False
+        path = urlparse(url).path.lower()
+        if plat == "pornhub.com" and not re.match(r"^/(model|pornstar|channels)/", path):
+            return False  # video pages are often reuploads by others
+        return any(h and re.search(rf"(^|[/_.-]){re.escape(h)}($|[/_.?-])", path) for h in handles)
+
+    def adult_platform_sweep(self, name: str, handles: list[str], seen: set[str], max_pages: int = 12) -> list[Source]:
+        """Search each adult platform for the creator's own profile/storefront pages and read them."""
+        picked: list[tuple[str, str]] = []
+        terms = list(dict.fromkeys([f'"{name}"'] + [h for h in handles[:3]]))
+        for plat in ADULT_PLATFORMS:
+            for term in terms[:2]:
+                for url, title in self.search(f"{term} site:{plat}", max_results=5):
+                    u = url.split("#")[0].rstrip("/")
+                    if u in seen or not self.is_creator_profile(u, handles):
+                        continue
+                    seen.add(u)
+                    picked.append((url, title))
+            if len(picked) >= max_pages:
+                break
+        if picked:
+            log(f"→ Adult-platform profiles found: {len(picked)}")
+        return self.fetch_many(picked[:max_pages], kind="platform")
+
+    # ───────────────────────────────────────────── Sub-pages of the creator's own sites
+    def follow_site_pages(self, pages: list[Source], per_site: int = 5) -> list[Source]:
+        """For each fetched page on the creator's own site (not a social platform or link hub), read up to
+        `per_site` more pages on the same site, preferring about/bio/FAQ/interview/blog pages."""
+        if per_site <= 0:
+            return []
+        seen = {p.url.split("#")[0].rstrip("/") for p in pages}
+        targets: list[tuple[str, str]] = []
+        done_sites: set[str] = set()
+        for p in pages:
+            html = p.meta.pop("html", "")
+            dom = self._domain(p.url)
+            if not html or dom in done_sites or self._in(dom, LOGIN_WALLED_DOMAINS | LINK_HUB_DOMAINS):
+                continue
+            done_sites.add(dom)
+            cands = []
+            for u, t in extract_links(html, p.url):
+                if self._domain(u) != dom or u.split("#")[0].rstrip("/") in seen or HUB_SKIP_RE.search(u):
+                    continue
+                score = len(SITE_PAGE_HINTS.findall(u + " " + t)) * 10 - u.count("/")
+                cands.append((score, u, t))
+            cands.sort(key=lambda c: -c[0])
+            for _, u, t in cands[:per_site]:
+                seen.add(u.split("#")[0].rstrip("/"))
+                targets.append((u, t))
+        if targets:
+            log(f"→ Following {len(targets)} sub-pages on the creator's own sites")
+        return self.fetch_many(targets, kind="user")
+
+    # ───────────────────────────────────────────── Link-in-bio hubs (Linktree, Beacons, …)
+    def crawl_link_hub(self, url: str, max_links: int = 25, depth: int = 1, site_pages: int = 5) -> list[Source]:
+        """Read a link-in-bio page and every page it links to (one level by default, or `depth`
+        levels when the linked page is itself a link hub), plus up to `site_pages` sub-pages on each
+        of the creator's own websites."""
+        hub = self.fetch(url, kind="hub")
+        if not hub:
+            return []
+        html = hub.meta.pop("html", "")
+        links = extract_links(html, url)
+        hub.text = hub.text + "\n\n## Links on this page\n" + "\n".join(f"- {t or u}: {u}" for u, t in links)
+        out = [hub]
+        targets = []
+        for u, t in links:
+            dom = self._domain(u)
+            if self._in(dom, PEOPLE_SEARCH_DOMAINS):
+                self._skip(u, "people-search / records site")
+            elif LEAK_URL_RE.search(u):
+                self._skip(u, "leak / repost site")
+            elif HUB_SKIP_RE.search(u) or not self.allowed_url(u, user_supplied=True):
+                self._skip(u, "not readable text (store, app, payment or legal page)")
+            else:
+                targets.append((u, t))
+        log(f"→ Link hub {url}: {len(links)} links, reading {min(len(targets), max_links)}")
+        for u, t in targets[:max_links]:
+            debug(f"hub link: {t} → {u}")
+        sub_hubs = [u for u, _ in targets[:max_links] if self._in(self._domain(u), LINK_HUB_DOMAINS)]
+        pages = self.fetch_many([(u, t) for u, t in targets[:max_links] if u not in sub_hubs], kind="user",
+                                keep_html=site_pages > 0)
+        out.extend(pages)
+        out.extend(self.follow_site_pages(pages, per_site=site_pages))
+        for p in pages:
+            p.meta.pop("html", None)
+        if depth > 1:
+            for sh in sub_hubs:
+                out.extend(self.crawl_link_hub(sh, max_links=max_links, depth=depth - 1, site_pages=site_pages))
+        return out
+
+
+def creator_handles(name: str, seeds: list[str], extra: list[str] | None = None) -> list[str]:
+    """Likely usernames: explicit --handle values, link-hub usernames, and slugs of the stage name."""
+    handles: list[str] = [h.strip().lstrip("@").lower() for h in (extra or []) if h.strip()]
+    for s in seeds:
+        seg = [p for p in urlparse(s).path.split("/") if p]
+        if seg:
+            handles.append(seg[0].lstrip("@").lower())
+    parts = [p.lower() for p in re.split(r"\s+", name.strip()) if p]
+    if parts:
+        handles += ["".join(parts), "_".join(parts), "-".join(parts), ".".join(parts)]
+    return [h for h in dict.fromkeys(handles) if len(h) >= 4]
+
+
+def load_local_file(path: str) -> Source:
+    """A creator-provided text source (brief, Q&A, transcript, bio). Treated as authoritative."""
+    from pathlib import Path
+
+    p = Path(path)
+    raw = p.read_text("utf-8", errors="replace")
+    if p.suffix.lower() in (".html", ".htm"):
+        raw, _ = extract_main_text(raw)
+    elif p.suffix.lower() == ".json":
+        import json
+
+        try:
+            raw = json.dumps(json.loads(raw), ensure_ascii=False, indent=1)
+        except ValueError:
+            pass
+    return Source(url=f"file://{p.resolve()}", title=p.name, text=collapse_ws(raw), kind="brief")
+
+
+def extract_meta(html: str) -> str:
+    """og:/twitter:/meta description – often the only readable bio on social profiles."""
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html[:300_000], "html.parser")
+    vals = []
+    for attr, name in (("property", "og:title"), ("property", "og:description"), ("name", "description"),
+                       ("name", "twitter:description")):
+        tag = soup.find("meta", attrs={attr: name})
+        if tag and tag.get("content"):
+            v = tag["content"].strip()
+            if v and v not in vals:
+                vals.append(v)
+    return " | ".join(vals)
+
+
+def extract_links(html: str, base_url: str) -> list[tuple[str, str]]:
+    """Outbound links from a link hub: anchors plus URLs in embedded JSON (Linktree/Next.js pages)."""
+    import json
+    from urllib.parse import urljoin
+
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    base_clean = base_url.split("#")[0].rstrip("/")
+    found: dict[str, str] = {}
+
+    def add(u: str, t: str = "") -> None:
+        u = urljoin(base_url, u.strip())
+        if not u.startswith("http") or u.split("#")[0].rstrip("/") == base_clean:
+            return
+        if urlparse(u).path in ("", "/") and urlparse(u).netloc == urlparse(base_url).netloc:
+            return  # the hub site's own home page
+        u = u.split("#")[0]
+        if u not in found or (t and not found[u]):
+            found[u] = t.strip()[:120]
+
+    for a in soup.find_all("a", href=True):
+        add(a["href"], a.get_text(" ", strip=True))
+
+    def walk(node):
+        if isinstance(node, dict):
+            u = node.get("url") or node.get("href")
+            if isinstance(u, str) and u.startswith("http"):
+                add(u, str(node.get("title") or node.get("name") or ""))
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+
+    for script in soup.find_all("script"):
+        if script.get("id") == "__NEXT_DATA__" or script.get("type") == "application/json":
+            try:
+                walk(json.loads(script.string or ""))
+            except (ValueError, TypeError):
+                continue
+    junk = re.compile(r"(cdn\.|static\.|assets\.|\.(js|css|svg|png|jpe?g|webp|woff2?)(\?|$)|googletagmanager|"
+                      r"facebook\.com/tr|sentry|linktr\.ee/(s|privacy|terms))", re.I)
+    return [(u, t) for u, t in found.items() if not junk.search(u)]
+
+
+def extract_main_text(html: str, url: str = "") -> tuple[str, str]:
+    """Readable text from HTML. Uses trafilatura if installed, else a BeautifulSoup heuristic."""
+    title = ""
+    try:
+        import trafilatura  # type: ignore
+
+        text = trafilatura.extract(html, url=url, include_comments=False, include_tables=False) or ""
+        meta = trafilatura.extract_metadata(html)
+        title = (meta.title if meta else "") or ""
+        if len(text) > 400:
+            return collapse_ws(text), title
+    except ImportError:
+        pass
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    if soup.title:
+        title = soup.title.get_text(" ", strip=True)
+    for tag in soup(["script", "style", "noscript", "nav", "footer", "header", "aside", "form", "svg", "iframe"]):
+        tag.decompose()
+    for sel in ['[class*="cookie"]', '[class*="newsletter"]', '[class*="related"]', '[class*="comment"]',
+                '[id*="comment"]', '[class*="share"]', '[class*="advert"]', '[class*="sidebar"]']:
+        for tag in soup.select(sel):
+            tag.decompose()
+    root = soup.find("article") or soup.find("main") or soup.body or soup
+    parts: list[str] = []
+    for el in root.find_all(["h1", "h2", "h3", "p", "li", "blockquote", "dd"]):
+        t = el.get_text(" ", strip=True)
+        if len(t) < 25 and el.name not in ("h1", "h2", "h3"):
+            continue
+        if el.name in ("h1", "h2", "h3"):
+            t = f"\n## {t}"
+        parts.append(t)
+    # de-duplicate nested li/p repeats
+    seen: set[str] = set()
+    uniq = []
+    for p in parts:
+        if p not in seen:
+            seen.add(p)
+            uniq.append(p)
+    return collapse_ws("\n".join(uniq)), title
+
+
+def mentions_person(text: str, name: str, aliases: list[str] | None = None) -> bool:
+    """Cheap relevance filter: the page must mention the surname (or an alias) a few times."""
+    names = [name] + list(aliases or [])
+    low = text.lower()
+    for n in names:
+        tokens = [t for t in re.split(r"\s+", n.strip()) if len(t) > 2]
+        if not tokens:
+            continue
+        surname = tokens[-1].lower()
+        if low.count(surname) >= 3 or n.lower() in low:
+            return True
+    return False
