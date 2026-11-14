@@ -110,8 +110,27 @@ class FakeLLM(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
+        if body.get("model") == "new-model" and ("max_tokens" in body or "temperature" in body):
+            bad = "max_tokens" if "max_tokens" in body else "temperature"
+            data = json.dumps({"error": {"message": f"Unsupported parameter: '{bad}'"}}).encode()
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         system = body["messages"][0]["content"]
         user_msg = body["messages"][1]["content"]
+        if body.get("model") == "prude" and "character-card writer" in system:
+            content = "I'm sorry, but I can't help with creating that content."
+            resp = {"choices": [{"message": {"content": content}}]}
+            data = json.dumps(resp).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if "Nova" in system:
             out = nova_reply(system, user_msg)
         elif "meticulous research assistant" in system:
@@ -240,7 +259,8 @@ class FakeWeb(BaseHTTPRequestHandler):
  {{"title":"Podcast interview","url":"{b}/podcast"}},
  {{"title":"Leaks","url":"https://example-leaked-site.com/ivy"}},
  {{"title":"Find address","url":"https://www.spokeo.com/ivy"}},
- {{"title":"App","url":"https://apps.apple.com/app/x"}}]}}}}</script></body></html>""",
+ {{"title":"App","url":"https://apps.apple.com/app/x"}},
+ {{"title":"My OF","url":"https://onlyfans.com/ivyxo"}}]}}}}</script></body></html>""",
             "/about": "<html><body><article><p>" + "Ivy Example loves horror games and teasing her chat. " * 20
                       + f'</p><a href="{b}/faq">FAQ</a> <a href="{b}/cart">Cart</a></article></body></html>',
             "/nova": "<html><body><article><p>" + "Nova Test is a streamer. " * 40 + "</p></article></body></html>",
@@ -362,10 +382,14 @@ def main():
             raise AssertionError("talent mode without consent note should exit")
         except SystemExit as e:
             check("consent-note" in str(e), "--talent requires --consent-note")
-        rc = cli.main(["Ivy Example", "--talent", "--nsfw", "--seed", web_url + "/hub", "--file", str(brief),
-                       "--boundaries", str(limits), "--consent-note", "Approved by Ivy, release on file",
-                       "--base-url", llm_url, "--model", "f", "--out", tmp, "--no-cache", "-y"])
+        import contextlib, io
+        hub_log = io.StringIO()
+        with contextlib.redirect_stderr(hub_log):
+            rc = cli.main(["Ivy Example", "--talent", "--nsfw", "--seed", web_url + "/hub", "--file", str(brief),
+                           "--boundaries", str(limits), "--consent-note", "Approved by Ivy, release on file",
+                           "--base-url", llm_url, "--model", "f", "--out", tmp, "--no-cache", "-y"])
         check(rc == 0, "talent run finished")
+        check("Handles found on the link hub: ivyxo" in hub_log.getvalue(), "OnlyFans handle discovered from hub link")
         tout = Path(tmp) / "Ivy_Example"
         srcs = json.loads((tout / "sources.json").read_text())
         check(any(s.endswith("/hub") for s in srcs), "hub page used")
@@ -382,6 +406,32 @@ def main():
         check("No degradation." in td["system_prompt"], "boundaries embedded verbatim in system_prompt")
         check(td["creator_notes"].startswith("Authorization: Approved by Ivy"), "consent note recorded")
         check("nsfw" in td["tags"], "nsfw tag added")
+        check(not td["extensions"]["persona_forge"]["sources"], "creator card carries no research source list")
+        check("file://" not in json.dumps(td), "no local file paths inside the card")
+        settings = json.loads((tout / "run_settings.json").read_text())
+        check(settings["talent"] and settings["nsfw"] and "No degradation." in settings["boundaries_text"],
+              "run settings saved for rebuilds")
+
+        # Rebuild WITHOUT retyping --talent/--nsfw/--consent-note/--boundaries
+        rc = cli.main(["--from-dossier", str(tout / "dossier.json"), "--base-url", llm_url, "--model", "f",
+                       "--out", tmp, "--no-cache"])
+        check(rc == 0, "rebuild from dossier reuses saved settings (no consent-note error)")
+        rd = json.loads((tout / "Ivy_Example.card.json").read_text())["data"]
+        check(rd["creator_notes"].startswith("Authorization: Approved by Ivy") and "No degradation." in rd["system_prompt"],
+              "rebuilt card keeps consent note and boundaries")
+
+        # Refusing model: research is kept, exit code 1, resume hint
+        import contextlib, io
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            rc = cli.main(["--from-dossier", str(tout / "dossier.json"), "--base-url", llm_url, "--model", "prude",
+                           "--out", tmp, "--no-cache"])
+        check(rc == 1 and "refused" in buf.getvalue() and "--from-dossier" in buf.getvalue(),
+              "model refusal → clear message and resume command")
+        # Newer-API model: max_tokens/temperature rejected → automatic fallback
+        rc = cli.main(["--from-dossier", str(tout / "dossier.json"), "--base-url", llm_url, "--model", "new-model",
+                       "--out", tmp, "--no-cache"])
+        check(rc == 0, "max_completion_tokens / default-temperature fallback works")
         # ── Deep mode: gap-filling rounds, intimacy only from the creator's own channels
         def gap_search(self, q, max_results=8):
             if "opens up" in q or "why I started" in q:  # only the gap-fill queries find these pages
@@ -426,7 +476,8 @@ def main():
                  ("https://www.pornhub.com/model/novaxo", "model page"),
                  ("https://fapello.com/novatest", "leak"),
                  ("https://www.manyvids.com/Profile/9/someoneelse/Store", "other creator")]
-        rr.search = lambda q, max_results=5: cands if "manyvids" in q else []
+        queries_made = []
+        rr.search = lambda q, max_results=5: queries_made.append(q) or (cands if "manyvids" in q else [])
         fetched = []
         rr.fetch = lambda url, title="", kind="web", keep_html=False: fetched.append((url, kind)) or Source(url, title, "x" * 500, kind)
         rr.adult_platform_sweep("Nova Test", hs, set())
@@ -436,6 +487,12 @@ def main():
         check(not any("viewkey" in u or "fapello" in u or "someoneelse" in u for u in urls),
               "tube reuploads, leak sites and other creators skipped")
         check(all(k == "platform" for _, k in fetched), "platform pages tagged as the creator's own channel")
+        check(len(queries_made) <= 4, f"platform sweep batched into {len(queries_made)} searches (was up to 32)")
+        store = Source("https://www.manyvids.com/Profile/123/novatest/Store", "s", "x" * 500, "user",
+                       {"html": '<a href="https://www.manyvids.com/Video/999/someone-else">vid</a>'})
+        fetched.clear()
+        rr.follow_site_pages([store], per_site=5)
+        check(not fetched, "no sub-page following on multi-user platforms (other creators' pages)")
         ar = (nout / "audience_report.md").read_text()
         check("AUDIENCE_MARKER" in ar and "/forum" in ar, "audience_report.md written from discussion pages")
         check("leaked" not in ar, "leak sites excluded from audience research")

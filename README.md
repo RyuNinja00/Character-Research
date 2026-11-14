@@ -5,6 +5,8 @@ Give it a name and Persona Forge looks the person up on the web, gathers what it
 [Marinara Engine](https://github.com/Pasta-Devs/Marinara-Engine). It works best for public figures,
 historical figures and well-documented fictional characters.
 
+**New here? Read the step-by-step [MANUAL.md](MANUAL.md).**
+
 ```
 python -m persona_forge "Ada Lovelace" --era 1843 --push
 ```
@@ -38,7 +40,15 @@ cp .env.example .env      # then add your LLM endpoint/key
 Any **OpenAI-compatible** endpoint works: OpenAI, OpenRouter, Anthropic's compatible endpoint, DeepSeek,
 or a local model through Ollama, LM Studio, KoboldCpp or the llama.cpp server. For local models, set
 `LLM_JSON_MODE=off` if the server rejects `response_format`, and use `--workers 1`. Models of 14B or larger
-give much better cards.
+give much better cards. Newer OpenAI models that only accept `max_completion_tokens` or the default
+temperature are detected and handled automatically.
+
+**For `--nsfw` cards, pick a model that allows adult content.** Mainstream hosted models (OpenAI, Anthropic, Google)
+often refuse adult extraction or writing. A model that permits it, through OpenRouter or a local model, avoids
+that. If a model refuses, the run stops with a clear message, keeps all the research, and prints the
+`--from-dossier` command to rebuild with another `--model`. Nothing is re-scraped, and refusals are never cached.
+
+Requires Python 3.9 or newer. `.env` is read from the folder you run in, or from the project folder.
 
 ## Usage
 
@@ -114,9 +124,11 @@ python -m persona_forge "Ivy Wren" --talent --nsfw --deep \
 - **The creator's own adult-platform pages come first.** The tool searches OnlyFans, Fansly, ManyVids,
   Clips4Sale, IWantClips, LoyalFans, FanCentro, JustFor.Fans, Fanvue, verified Pornhub model pages and the main
   cam sites for the creator's **own** profile or storefront. A page counts as theirs only if its URL contains
-  one of their handles. Handles come from the link-hub username, the stage name, and anything you add with
-  `--handle`. These pages are read before any other search result, and adult-industry press (XBIZ, AVN)
-  interviews are searched first.
+  one of their handles. Handles come from the link-hub username, the usernames in the hub's own platform links
+  (e.g. its OnlyFans link), the stage name, and anything you add with `--handle`. This search runs on every
+  `--talent --nsfw` run (no `--search-web` needed), with a handful of batched searches so the free search
+  engine isn't rate-limited. With `--search-web`/`--deep`, adult-industry press (XBIZ, AVN) interviews are
+  searched first.
 - **It skips pages the creator doesn't control:** tube-site video pages (often reuploads by others),
   aggregators, other creators' pages, and leak or repost sites.
 - **Kinks are worked out from posted content.** Every recurring theme, niche, tag, series or roleplay scenario
@@ -207,7 +219,13 @@ Files go in `output/<Name>/`:
 | `dossier.json`, `facts.jsonl`, `sources.md` | The research, so you can check and edit it. |
 
 To change what goes into the card, edit `dossier.json` (or the creator brief) and rebuild with
-`--from-dossier output/<Name>/dossier.json`. That rebuild skips the research and the scraping.
+`--from-dossier output/<Name>/dossier.json`. That rebuild skips the research and the scraping. It also reuses
+the original run's settings from `run_settings.json` (talent/NSFW mode, consent note, boundaries, era, style…),
+so you only type what you want to change.
+
+Research is saved **before** the card is written, so a failure late in the run never costs you the research.
+Creator (`--talent`) cards carry no list of research sources and never local file paths, which matters for cards
+you sell. The full list stays in `sources.md` and `review.md`.
 
 ### Importing into Marinara by hand
 

@@ -208,7 +208,7 @@ def gap_fill(
                 per_domain[dom] = per_domain.get(dom, 0) + 1
         pages = platform_pages + r.fetch_many(profiles, kind="platform")
         budget = max(0, pages_per_round - len(pages))
-        others = [p for p in r.fetch_many(picked[: budget * 2]) if mentions_person(p.text, opts.name, aliases)]
+        others = [p for p in r.fetch_many(picked[: budget * 2]) if mentions_person(p.text, opts.name, list(aliases) + handles)]
         pages = pages + others[:budget]
         if not pages:
             rounds.append({"round": rnd, "queries": queries, "pages": 0, "new_facts": 0, "coverage": cov.score})

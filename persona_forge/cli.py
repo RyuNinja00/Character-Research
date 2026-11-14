@@ -38,7 +38,9 @@ from .util import DiskCache, log, set_verbose, slugify
 
 def load_dotenv(path: Path) -> None:
     if not path.exists():
-        return
+        path = Path(__file__).resolve().parents[1] / ".env"  # project folder, so it works from anywhere
+        if not path.exists():
+            return
     for line in path.read_text("utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
@@ -81,7 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--max-rounds", type=int, default=4, help="Max --deep research rounds")
     g.add_argument("--pages-per-round", type=int, default=10, help="Max new pages read per --deep round")
     g.add_argument("--no-wikipedia", action="store_true",
-                   help="Don't anchor on Wikipedia. Only the pages you pass with --url are used (no web search).")
+                   help="Don't anchor on Wikipedia; use --seed/--url/--file sources (web search only with --search-web/--deep)")
     g.add_argument("--no-web", action="store_true", help="Skip web search; use Wikipedia/Wikiquote/--url only")
     g.add_argument("--max-pages", type=int, default=12, help="Max web pages to read (default 12)")
     g.add_argument("--search-provider", default=env("SEARCH_PROVIDER", "auto"),
@@ -173,6 +175,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 # ─────────────────────────────────────────────────────────────── research
 def pick_wikipedia(r: Researcher, name: str, args) -> Source:
+    import requests
+
+    try:
+        return _pick_wikipedia(r, name, args)
+    except ValueError as e:  # disambiguation page
+        raise SystemExit(str(e)) from None
+    except requests.RequestException as e:
+        raise SystemExit(f"Could not reach Wikipedia ({e.__class__.__name__}). Check your connection, or use "
+                         "--no-wikipedia with --seed/--url/--file.") from None
+
+
+def _pick_wikipedia(r: Researcher, name: str, args) -> Source:
     if args.wiki_title:
         src = r.wikipedia_article(args.wiki_title)
         if not src:
@@ -213,6 +227,11 @@ def gather_sources(r: Researcher, args) -> tuple[list[Source], str, str]:
     for seed in args.seed:
         sources.extend(r.crawl_link_hub(seed, max_links=args.seed_max_links, depth=args.seed_depth,
                                         site_pages=args.site_pages))
+    if r.discovered_handles:  # usernames found in the creator's own links (OnlyFans, Fansly, socials…)
+        new = [h for h in r.discovered_handles if h not in args.handles]
+        if new:
+            log(f"→ Handles found on the link hub: {', '.join(new)}")
+            args.handles.extend(new)
 
     if not args.no_wikipedia:
         wiki = pick_wikipedia(r, name, args)
@@ -233,7 +252,13 @@ def gather_sources(r: Researcher, args) -> tuple[list[Source], str, str]:
         sources.extend(r.follow_site_pages(user_pages, per_site=args.site_pages))
         for p in user_pages:
             p.meta.pop("html", None)
-    # the same page can arrive via a hub and --url; keep one copy
+    # Creator's own adult-platform profiles: only their own pages are read, so this runs whenever web access is
+    # allowed – no --search-web needed.
+    if args.talent and args.nsfw and not args.no_web:
+        plat = r.adult_platform_sweep(name, args.handles, {s.url.split("#")[0].rstrip("/") for s in sources},
+                                      max_pages=args.max_pages)
+        sources.extend(plat)
+    # the same page can arrive via a hub, --url and the sweep; keep one copy
     uniq: dict[str, Source] = {}
     for s in sources:
         uniq.setdefault(s.url.split("#")[0].rstrip("/"), s)
@@ -244,10 +269,6 @@ def gather_sources(r: Researcher, args) -> tuple[list[Source], str, str]:
             descriptor = args.descriptor or ""
         hint = f" {descriptor}" if descriptor else ""
         short_hint = " ".join(descriptor.split()[:4]) if descriptor else ""
-        if args.talent and args.nsfw:
-            plat = r.adult_platform_sweep(name, args.handles, {s.url.split("#")[0].rstrip("/") for s in sources},
-                                          max_pages=args.max_pages)
-            sources.extend(plat)
         queries = ([q.format(name=name) for q in ADULT_PRESS_QUERIES] if args.nsfw else []) + [
             f'"{name}" interview',
             f'"{name}" podcast',
@@ -259,12 +280,12 @@ def gather_sources(r: Researcher, args) -> tuple[list[Source], str, str]:
             f'"{name}" biography early life',
             f'"{name}" quotes OR said',
         ]
-        seen = {s.url for s in sources}
+        seen = {s.url.split("#")[0].rstrip("/") for s in sources}
         per_domain: dict[str, int] = {}
         picked: list[tuple[str, str]] = []
         for q in queries:
             for url, title in r.search(q.strip(), max_results=8):
-                url = url.split("#")[0]
+                url = url.split("#")[0].rstrip("/")
                 dom = urlparse(url).netloc.lower().removeprefix("www.")
                 if url in seen or dom.endswith("wikipedia.org") or dom.endswith("wikiquote.org"):
                     continue
@@ -282,7 +303,7 @@ def gather_sources(r: Researcher, args) -> tuple[list[Source], str, str]:
         picked = picked[: int(args.max_pages * 1.5)]  # over-fetch; some pages fail or are irrelevant
         log(f"→ Reading {len(picked)} web pages…")
         pages = r.fetch_many(picked)
-        relevant = [p for p in pages if mentions_person(p.text, name)][: args.max_pages]
+        relevant = [p for p in pages if mentions_person(p.text, name, args.handles)][: args.max_pages]
         log(f"  {len(relevant)} relevant pages")
         sources.extend(relevant)
     return sources, name, descriptor
@@ -363,14 +384,65 @@ def write_review(opts: Options, facts, sources: list[Source], used: list[Source]
     return "\n".join(lines) + "\n"
 
 
+# ─────────────────────────────────────────────────────────────── run settings
+# Saved next to dossier.json so --from-dossier rebuilds with the same mode, voice and safety settings
+# without retyping them. Anything given explicitly on the command line wins.
+RUN_SETTINGS = ["talent", "nsfw", "consent_note", "descriptor", "era", "scenario", "style", "pov", "greetings",
+                "lore_entries", "language", "creator", "handle", "merge_fields", "spec", "scan_depth", "token_budget"]
+
+
+def save_run_settings(out: Path, args, boundaries: str) -> None:
+    data = {k: getattr(args, k) for k in RUN_SETTINGS}
+    data["boundaries_text"] = boundaries
+    (out / "run_settings.json").write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
+
+
+def apply_saved_settings(args, parser: argparse.ArgumentParser) -> str:
+    """Fill unset options from run_settings.json beside the dossier. Returns saved boundaries text."""
+    f = Path(args.from_dossier).with_name("run_settings.json")
+    if not f.exists():
+        return ""
+    saved = json.loads(f.read_text("utf-8"))
+    applied = []
+    for k in RUN_SETTINGS:
+        if k in saved and getattr(args, k) == parser.get_default(k) and saved[k] != parser.get_default(k):
+            setattr(args, k, saved[k])
+            applied.append(k)
+    if applied:
+        log(f"→ Reusing settings from the original run: {', '.join(applied)}")
+    return saved.get("boundaries_text", "")
+
+
+def card_sources(urls: list[str], talent: bool) -> list[str]:
+    """Sources written INTO the card. Never local file paths; for creator cards (often sold) none at all –
+    the full list stays in sources.md / review.md."""
+    if talent:
+        return []
+    return [u for u in urls if u.startswith(("http://", "https://"))]
+
+
+def save_research(out: Path, slug: str, opts, dossier: dict, facts, source_urls: list[str]) -> None:
+    (out / "dossier.json").write_text(json.dumps(dossier, ensure_ascii=False, indent=2), "utf-8")
+    (out / "sources.json").write_text(json.dumps(source_urls, indent=2), "utf-8")
+    if facts:
+        with (out / "facts.jsonl").open("w", encoding="utf-8") as fh:
+            for f in facts:
+                fh.write(json.dumps(f.__dict__, ensure_ascii=False) + "\n")
+    (out / "sources.md").write_text(
+        f"# Sources for {opts.name}\n\n" + "\n".join(f"- {u}" for u in source_urls) + "\n", "utf-8"
+    )
+
+
 # ─────────────────────────────────────────────────────────────── main
 def main(argv: list[str] | None = None) -> int:
     load_dotenv(Path.cwd() / ".env")
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
     set_verbose(args.verbose)
     if not args.name and not args.from_dossier:
-        build_parser().print_help()
+        parser.print_help()
         return 2
+    saved_boundaries = apply_saved_settings(args, parser) if args.from_dossier else ""
     if not args.api_key and "localhost" not in args.base_url and "127.0.0.1" not in args.base_url:
         log("! No API key set (LLM_API_KEY / --api-key). Local servers usually don't need one.")
 
@@ -388,7 +460,7 @@ def main(argv: list[str] | None = None) -> int:
         args.no_wikipedia = True
         if not args.consent_note.strip():
             raise SystemExit('--talent needs --consent-note, e.g. --consent-note "Authorised by <creator> (signed release on file), 2026-11-14"')
-    boundaries = Path(args.boundaries).read_text("utf-8") if args.boundaries else ""
+    boundaries = Path(args.boundaries).read_text("utf-8") if args.boundaries else saved_boundaries
     if args.nsfw and args.talent and not boundaries:
         log("! Tip: pass the creator's hard limits with --boundaries limits.txt so the card enforces them.")
 
@@ -427,12 +499,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.from_dossier:
         dossier = json.loads(Path(args.from_dossier).read_text("utf-8"))
         opts.name = args.name or dossier.get("name") or "Unknown"
-        opts.descriptor = dossier.get("descriptor", "")
+        opts.descriptor = dossier.get("descriptor", "") or opts.descriptor
         src_file = Path(args.from_dossier).with_name("sources.json")
         if src_file.exists():
             source_urls = json.loads(src_file.read_text("utf-8"))
-        card = write_card(main_llm, dossier, opts)
-        lore = write_lorebook(main_llm, dossier, opts)
         facts = []
     else:
         r = Researcher(
@@ -466,20 +536,34 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 dossier, facts, aliases, used, sources = gf.dossier, gf.facts, gf.aliases, gf.used, gf.sources
                 gap_report = (gf.coverage, gf.rounds)
-        if len(facts) < 8:
-            raise SystemExit(f"Only {len(facts)} facts found about {opts.name}. Add pages with --url.")
         if gap_report is None:
             gap_report = (coverage(dossier, opts), [])
         review_inputs = (sources, used, r.skipped)
+        source_urls = [s.url for s in used]
+        out_early = Path(args.out) / slugify(opts.name)
+        out_early.mkdir(parents=True, exist_ok=True)
+        save_research(out_early, slugify(opts.name), opts, dossier, facts, source_urls)
+        save_run_settings(out_early, args, boundaries)
+        (out_early / "review.md").write_text(write_review(opts, facts, *review_inputs, gap_report=gap_report), "utf-8")
+        log(f"→ Research saved to {out_early}/ (dossier.json, review.md)")
+        if len(facts) < 8:
+            raise SystemExit(f"Only {len(facts)} facts found about {opts.name} – see {out_early}/review.md for what was "
+                             "read and skipped. Add pages with --url, a brief with --file, or try --deep.")
         if args.audience_research:
             # Separate report only – nothing from it reaches the dossier, card or lorebook.
             audience_result = audience_research(
                 r, extract_llm, main_llm, opts, args.handles, max_pages=args.audience_pages,
                 seen_urls={u for u, _ in r.skipped},
             )
+    try:
         card = write_card(main_llm, dossier, opts)
         lore = write_lorebook(main_llm, dossier, opts)
-        source_urls = [s.url for s in used]
+    except Exception as e:  # noqa: BLE001 – keep the research; tell the user how to resume
+        hint = Path(args.out) / slugify(opts.name) / "dossier.json"
+        log(f"\n! Writing the card failed: {e}")
+        log(f"  Your research is saved. Fix the problem (e.g. another --model) and rebuild without re-researching:\n"
+            f"    python -m persona_forge --from-dossier {hint}")
+        return 1
 
     # ── outputs
     slug = slugify(opts.name)
@@ -491,12 +575,12 @@ def main(argv: list[str] | None = None) -> int:
     sprites = load_sprites(args.sprites) if args.sprites else None
 
     card_v2 = build_card(
-        opts.name, card, dossier, lore, creator=args.creator, sources=source_urls,
+        opts.name, card, dossier, lore, creator=args.creator, sources=card_sources(source_urls, args.talent),
         scan_depth=args.scan_depth, token_budget=args.token_budget, merge_fields=args.merge_fields,
         boundaries=boundaries, consent_note=args.consent_note, nsfw=args.nsfw,
         image_appearance=image_appearance, sprites=sprites,
     )
-    card_v3 = to_v3(card_v2, source_urls)
+    card_v3 = to_v3(card_v2, card_sources(source_urls, args.talent))
     lorebook = build_lorebook(
         opts.name, lore, scan_depth=args.scan_depth, token_budget=args.token_budget,
         description=f"Facts about the people, places, events and works in {opts.name}'s life.",
@@ -532,15 +616,9 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(card_v3 if args.spec == "v3" else card_v2, ensure_ascii=False, indent=2), "utf-8"
     )
     (out / f"{slug}.lorebook.json").write_text(json.dumps(lorebook, ensure_ascii=False, indent=2), "utf-8")
-    (out / "dossier.json").write_text(json.dumps(dossier, ensure_ascii=False, indent=2), "utf-8")
-    (out / "sources.json").write_text(json.dumps(source_urls, indent=2), "utf-8")
-    if facts:
-        with (out / "facts.jsonl").open("w", encoding="utf-8") as fh:
-            for f in facts:
-                fh.write(json.dumps(f.__dict__, ensure_ascii=False) + "\n")
-    (out / "sources.md").write_text(
-        f"# Sources for {opts.name}\n\n" + "\n".join(f"- {u}" for u in source_urls) + "\n", "utf-8"
-    )
+    if not args.from_dossier:
+        save_research(out, slug, opts, dossier, facts, source_urls)
+    save_run_settings(out, args, boundaries)
     if review_inputs:
         review = write_review(opts, facts, *review_inputs, gap_report=gap_report)
         if opts.nsfw and (hits := flag_excluded(card, lore)):

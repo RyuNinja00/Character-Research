@@ -67,6 +67,10 @@ ADULT_PLATFORMS: dict[str, str] = {
     "bongacams.com": "",
     "fanvue.com": "",
 }
+# Multi-user platforms: their other pages belong to other people, so sub-page following never runs on them.
+NO_SUBPAGE_DOMAINS = (LOGIN_WALLED_DOMAINS | LINK_HUB_DOMAINS | set(ADULT_PLATFORMS) |
+                      {"reddit.com", "youtube.com", "twitch.tv", "kick.com", "throne.com", "amazon.com", "etsy.com",
+                       "medium.com", "substack.com", "tumblr.com", "discord.gg", "discord.com", "t.me", "telegram.me"})
 ADULT_PRESS_QUERIES = ['"{name}" XBIZ OR AVN interview', '"{name}" adult creator interview']
 SITE_PAGE_HINTS = re.compile(r"about|bio|faq|interview|press|story|blog|journal|meet|who|me\b|q-?and-?a|podcast", re.I)
 SKIP_EXTENSIONS = (".pdf", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".mp4", ".mp3", ".zip")
@@ -111,6 +115,7 @@ class Researcher:
         self.http = requests.Session()
         self.http.headers["User-Agent"] = USER_AGENT
         self.skipped: list[tuple[str, str]] = []  # (url, reason) – reported in review.md
+        self.discovered_handles: list[str] = []      # usernames seen in the creator's own platform links
 
     # ───────────────────────────────────────────── Wikipedia / Wikiquote
     def _wiki_api(self, site: str, params: dict) -> dict:
@@ -224,10 +229,11 @@ class Researcher:
                 provider = "searxng"
             else:
                 provider = "ddg"
-        try:
-            results = getattr(self, f"_search_{provider}")(query, max_results)
-        except AttributeError:
+        fn = getattr(self, f"_search_{provider}", None)
+        if fn is None:
             raise ValueError(f"Unknown search provider: {provider}")
+        try:
+            results = fn(query, max_results)
         except Exception as e:  # noqa: BLE001 – a search failure shouldn't kill the run
             log(f"  ! search failed ({provider}): {e}")
             results = []
@@ -296,6 +302,7 @@ class Researcher:
         resp = self.http.post(
             "https://api.tavily.com/search",
             json={"api_key": self.tavily_key, "query": query, "max_results": n},
+            headers={"Authorization": f"Bearer {self.tavily_key}"},
             timeout=self.timeout,
         )
         resp.raise_for_status()
@@ -356,7 +363,7 @@ class Researcher:
                 if user_supplied and meta and meta not in text:
                     text = f"[Profile/meta description] {meta}\n\n{text}"
                 # Pages you chose are kept even if short (a social bio can be one line).
-                if len(text) > (60 if user_supplied else 400):
+                if len(text) > (0 if kind == "hub" else 60 if user_supplied else 400):
                     src = Source(url=url, title=title or page_title or url, text=text[: self.max_page_chars],
                                  kind=kind, meta={"html": resp.text[:400_000]} if keep_html else {})
                 else:
@@ -395,15 +402,19 @@ class Researcher:
     def adult_platform_sweep(self, name: str, handles: list[str], seen: set[str], max_pages: int = 12) -> list[Source]:
         """Search each adult platform for the creator's own profile/storefront pages and read them."""
         picked: list[tuple[str, str]] = []
-        terms = list(dict.fromkeys([f'"{name}"'] + [h for h in handles[:3]]))
-        for plat in ADULT_PLATFORMS:
-            for term in terms[:2]:
-                for url, title in self.search(f"{term} site:{plat}", max_results=5):
-                    u = url.split("#")[0].rstrip("/")
-                    if u in seen or not self.is_creator_profile(u, handles):
-                        continue
-                    seen.add(u)
-                    picked.append((url, title))
+        terms = list(dict.fromkeys([f'"{name}"'] + [f'"{h}"' for h in handles[:3]]))
+        term = " OR ".join(terms[:3])
+        plats = list(ADULT_PLATFORMS)
+        # A few batched "site:a OR site:b …" searches instead of one per platform (keeps free search from
+        # rate-limiting the run).
+        for i in range(0, len(plats), 5):
+            sites = " OR ".join(f"site:{p}" for p in plats[i : i + 5])
+            for url, title in self.search(f"({term}) ({sites})", max_results=10):
+                u = url.split("#")[0].rstrip("/")
+                if u in seen or not self.is_creator_profile(u, handles):
+                    continue
+                seen.add(u)
+                picked.append((url, title))
             if len(picked) >= max_pages:
                 break
         if picked:
@@ -422,7 +433,7 @@ class Researcher:
         for p in pages:
             html = p.meta.pop("html", "")
             dom = self._domain(p.url)
-            if not html or dom in done_sites or self._in(dom, LOGIN_WALLED_DOMAINS | LINK_HUB_DOMAINS):
+            if not html or dom in done_sites or self._in(dom, NO_SUBPAGE_DOMAINS):
                 continue
             done_sites.add(dom)
             cands = []
@@ -454,6 +465,9 @@ class Researcher:
         targets = []
         for u, t in links:
             dom = self._domain(u)
+            h = platform_handle(u)
+            if h and h not in self.discovered_handles:
+                self.discovered_handles.append(h)
             if self._in(dom, PEOPLE_SEARCH_DOMAINS):
                 self._skip(u, "people-search / records site")
             elif LEAK_URL_RE.search(u):
@@ -465,7 +479,9 @@ class Researcher:
         log(f"→ Link hub {url}: {len(links)} links, reading {min(len(targets), max_links)}")
         for u, t in targets[:max_links]:
             debug(f"hub link: {t} → {u}")
-        sub_hubs = [u for u, _ in targets[:max_links] if self._in(self._domain(u), LINK_HUB_DOMAINS)]
+        # Linked link-hubs (another Linktree, a Carrd site…) are crawled when depth allows, otherwise read as pages.
+        sub_hubs = ([u for u, _ in targets[:max_links] if self._in(self._domain(u), LINK_HUB_DOMAINS)]
+                    if depth > 1 else [])
         pages = self.fetch_many([(u, t) for u, t in targets[:max_links] if u not in sub_hubs], kind="user",
                                 keep_html=site_pages > 0)
         out.extend(pages)
@@ -478,13 +494,33 @@ class Researcher:
         return out
 
 
+_NOT_HANDLES = {"profile", "model", "pornstar", "channels", "studio", "store", "u", "user", "users", "c", "p",
+                "share", "watch", "video", "videos", "home", "explore", "search", "login", "signup", "i", "en", "www"}
+
+
+def platform_handle(url: str) -> str:
+    """The username in a link to a social or adult platform (onlyfans.com/ivy → 'ivy'), or ''."""
+    host = urlparse(url).netloc.lower().removeprefix("www.")
+    known = set(ADULT_PLATFORMS) | LOGIN_WALLED_DOMAINS | {"reddit.com", "twitch.tv", "youtube.com", "kick.com"}
+    if not any(host == d or host.endswith("." + d) for d in known):
+        return ""
+    for seg in urlparse(url).path.split("/"):
+        seg = seg.strip().lstrip("@").lower()
+        if seg and seg not in _NOT_HANDLES and not seg.isdigit() and re.fullmatch(r"[a-z0-9_.-]{4,40}", seg):
+            return seg
+    return ""
+
+
 def creator_handles(name: str, seeds: list[str], extra: list[str] | None = None) -> list[str]:
     """Likely usernames: explicit --handle values, link-hub usernames, and slugs of the stage name."""
     handles: list[str] = [h.strip().lstrip("@").lower() for h in (extra or []) if h.strip()]
     for s in seeds:
         seg = [p for p in urlparse(s).path.split("/") if p]
+        host = urlparse(s).netloc.lower().removeprefix("www.")
         if seg:
             handles.append(seg[0].lstrip("@").lower())
+        elif host.count(".") >= 2:  # ivywren.carrd.co
+            handles.append(host.split(".")[0])
     parts = [p.lower() for p in re.split(r"\s+", name.strip()) if p]
     if parts:
         handles += ["".join(parts), "_".join(parts), "-".join(parts), ".".join(parts)]

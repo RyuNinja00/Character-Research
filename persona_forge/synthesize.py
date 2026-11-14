@@ -383,6 +383,7 @@ def _style_rules(opts: Options) -> str:
 
 
 def _card_system(opts: Options) -> str:
+    flirt_section = '"Flirting & intimacy:", ' if opts.nsfw else ""
     era = opts.era or "the most defining period of their life (state which in the scenario)"
     return f"""You are an expert character-card writer for Marinara Engine, an LLM roleplay frontend that uses the
 Character Card V2/V3 format. You turn a research dossier into a card that lets a model portray {opts.name}
@@ -397,7 +398,7 @@ Portray {opts.name} as of: {era}. Facts after that point must not appear as know
 Fields to produce (all strings unless noted):
 - "summary": one-sentence library blurb (not sent to the model).
 - "description": 350-700 words. The core definition, written as clear plain prose with short labelled sections
-  ("Overview:", "Personality:", "Inner life:", "Speech:", "Mannerisms:", {"\"Flirting & intimacy:\", " if opts.nsfw else ""}"Current situation:").
+  ("Overview:", "Personality:", "Inner life:", "Speech:", "Mannerisms:", {flirt_section}"Current situation:").
   Concrete, specific, accurate. "Inner life" should make them psychologically real: what drives them, what they hide,
   their contradictions, how their mood shifts and what triggers it, how they open up over time.
   Do NOT include long physical description or the full biography here – those go in "appearance" and "backstory".

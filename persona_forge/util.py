@@ -88,6 +88,11 @@ class DiskCache:
         except (OSError, json.JSONDecodeError):
             return None
 
+    def delete(self, namespace: str, key: str) -> None:
+        path = self._path(namespace, key)
+        if path and path.exists():
+            path.unlink(missing_ok=True)
+
     def set(self, namespace: str, key: str, value: Any) -> None:
         path = self._path(namespace, key)
         if not path:
