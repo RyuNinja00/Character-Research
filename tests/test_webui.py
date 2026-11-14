@@ -80,6 +80,13 @@ def main():
         req(base, f"/api/upload?talent=Nova_Test&kind=references&filename=ref{i}.png", "PUT", png)
     st, info = req(base, "/api/upload?talent=Nova_Test&kind=sources&filename=interview.txt", "PUT",
                    b"Nova Test interview: she streams, loves slow-burn teasing, talks fast.")
+    import shutil, subprocess
+    has_ffmpeg = bool(shutil.which("ffmpeg"))
+    if has_ffmpeg:
+        wav = Path(TMP) / "voice.wav"
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=duration=2", str(wav)], check=True)
+        st, info = req(base, "/api/upload?talent=Nova_Test&kind=audio&filename=voice%20note.wav", "PUT", wav.read_bytes())
+        check(info["files"]["audio"] == ["voice_note.wav"], "audio upload stored in audio/")
     check(info["files"]["references"] == ["ref1.png", "ref2.png"] and info["files"]["sources"] == ["interview.txt"],
           "uploads stored in references/ and sources/")
     st, _ = req(base, "/api/upload?talent=Nova_Test&kind=references&filename=evil.exe", "PUT", b"x")
@@ -104,6 +111,7 @@ def main():
     form.update({"mode": "talent", "name": "Nova Test", "consent_note": "Approved by Nova, release on file",
                  "nsfw": True, "no_web": True, "deep": False, "avatar_from_reference": True,
                  "base_url": llm_url, "model": "f", "api_key": "sk-secret-123", "greetings": "abc",
+                 "transcriber": "api", "transcribe_base_url": llm_url, "transcribe_api_key": "tk-secret",
                  "brief": info["brief"], "limits": info["limits"]})
     st, j = req(base, "/api/run", "POST", form)
     check(st == 200 and j["job"], "run started with blank optional boxes")
@@ -113,6 +121,11 @@ def main():
     check("Ignored “greetings”" in log, "junk number ignored with a note, not an error")
     check("brief is still the empty template" in log, "untouched brief template left out")
     check("sk-secret-123" not in log, "API key never appears in the log")
+    if has_ffmpeg:
+        check("--audio" in log and "Transcribing voice_note.wav" in log and "tk-secret" not in log,
+              "audio folder transcribed in the run (key kept out of the log)")
+        check((out_dir := d / "output" / "Nova_Test" / "transcripts").is_dir() and list(out_dir.glob("*.txt")),
+              "transcript saved in the creator's output folder")
     check("--extract-model= " in log or log.rstrip().count("--extract-model=") >= 1,
           "empty page-reading box sent as empty (a leftover .env value is not used)")
     check("ℹ Python:" in log and "Finished with exit code 0" in log, "console shows setup and exit code")

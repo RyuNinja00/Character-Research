@@ -52,8 +52,11 @@ UPLOAD_KINDS = {  # kind → (subfolder, allowed extensions)
     "fullbody": ("sprites/full-body", IMAGE_EXTS),
     "avatar": ("avatar", IMAGE_EXTS),
     "sources": ("sources", TEXT_EXTS),
+    "audio": ("audio", {".mp3", ".m4a", ".wav", ".ogg", ".oga", ".opus", ".webm", ".flac", ".aac", ".mp4", ".m4b",
+                        ".mkv", ".mov", ".wma"}),
 }
-SECRET_FIELDS = {"api_key", "image_api_key", "marinara_pass"}
+UPLOAD_LIMITS = {"audio": 1024 * 1024 * 1024}  # per kind; everything else uses MAX_UPLOAD
+SECRET_FIELDS = {"api_key", "image_api_key", "marinara_pass", "transcribe_api_key"}
 MAX_UPLOAD = 25 * 1024 * 1024
 
 URLS_HEADER = "# Extra pages for Persona Forge – one URL per line. Lines starting with # are ignored.\n"
@@ -87,7 +90,7 @@ def create_talent(name: str) -> str:
     """Create (or complete) the folder structure for a creator. Safe to call repeatedly."""
     slug = slugify(name)[:80] or "character"
     d = talent_dir(slug)
-    for sub in ("references", "sprites/full-body", "avatar", "sources", "output", "runs"):
+    for sub in ("references", "sprites/full-body", "avatar", "sources", "audio", "output", "runs"):
         (d / sub).mkdir(parents=True, exist_ok=True)
     if not (d / "brief.md").exists():
         (d / "brief.md").write_text(_template("creator_brief_template.md").replace("<Stage name>", name), "utf-8")
@@ -338,6 +341,17 @@ def build_command(slug: str, form: dict, rebuild: bool = False) -> tuple[list[st
     avatars = _files(d, "avatar", IMAGE_EXTS)
     if avatars and not (refs and _flag(form, "avatar_from_reference")):
         a += ["--avatar", str(d / "avatar" / avatars[0])]
+    audio_exts = UPLOAD_KINDS["audio"][1]
+    if not rebuild and _files(d, "audio", audio_exts):
+        a += ["--audio", str(d / "audio")]
+    if not rebuild and _flag(form, "transcribe_pages"):
+        a.append("--transcribe-pages")
+    for key, flag in (("whisper_model", "--whisper-model"), ("transcribe_base_url", "--transcribe-base-url"),
+                      ("transcribe_model", "--transcribe-model"), ("audio_language", "--audio-language")):
+        if _s(form, key):
+            a += [flag, _s(form, key)]
+    if _s(form, "transcriber") in ("auto", "local", "api", "off"):
+        a += ["--transcriber", _s(form, "transcriber")]
     if _files(d, "sprites", IMAGE_EXTS) or _files(d, "sprites/full-body", IMAGE_EXTS):
         a += ["--sprites", str(d / "sprites")]
 
@@ -345,7 +359,8 @@ def build_command(slug: str, form: dict, rebuild: bool = False) -> tuple[list[st
         a += ["--push", _s(form, "push_url") or "http://127.0.0.1:7860"]
 
     # secrets travel by environment variable, never on the command line or in settings.json
-    for key, var in (("api_key", "LLM_API_KEY"), ("image_api_key", "IMAGE_API_KEY"), ("marinara_pass", "MARINARA_PASS")):
+    for key, var in (("api_key", "LLM_API_KEY"), ("image_api_key", "IMAGE_API_KEY"), ("marinara_pass", "MARINARA_PASS"),
+                     ("transcribe_api_key", "TRANSCRIBE_API_KEY")):
         if _s(form, key):
             env[var] = _s(form, key)
     return a, env, notes
@@ -356,7 +371,9 @@ def save_env(form: dict) -> list[str]:
     mapping = {"base_url": "LLM_BASE_URL", "api_key": "LLM_API_KEY", "model": "LLM_MODEL",
                "extract_model": "LLM_EXTRACT_MODEL", "max_tokens": "LLM_MAX_TOKENS", "json_mode": "LLM_JSON_MODE",
                "image_base_url": "IMAGE_BASE_URL", "image_api_key": "IMAGE_API_KEY", "image_model": "IMAGE_MODEL",
-               "marinara_user": "MARINARA_USER", "marinara_pass": "MARINARA_PASS"}
+               "marinara_user": "MARINARA_USER", "marinara_pass": "MARINARA_PASS",
+               "transcribe_base_url": "TRANSCRIBE_BASE_URL", "transcribe_api_key": "TRANSCRIBE_API_KEY",
+               "transcribe_model": "TRANSCRIBE_MODEL", "whisper_model": "WHISPER_MODEL"}
     updates = {var: _s(form, key) for key, var in mapping.items() if _s(form, key)}
     if not updates:
         return []
@@ -373,6 +390,12 @@ def save_env(form: dict) -> list[str]:
     return sorted(updates)
 
 
+def _local_whisper() -> bool:
+    import importlib.util
+
+    return importlib.util.find_spec("faster_whisper") is not None
+
+
 def env_defaults() -> dict:
     """Non-secret values already in .env, shown as placeholders so the user knows what an empty box means."""
     vals = {}
@@ -387,6 +410,8 @@ def env_defaults() -> dict:
         "extract_model": vals.get("LLM_EXTRACT_MODEL", ""), "image_model": vals.get("IMAGE_MODEL", ""),
         "image_base_url": vals.get("IMAGE_BASE_URL", ""), "max_tokens": vals.get("LLM_MAX_TOKENS", ""),
         "has_api_key": bool(vals.get("LLM_API_KEY")), "has_image_key": bool(vals.get("IMAGE_API_KEY")),
+        "transcribe_base_url": vals.get("TRANSCRIBE_BASE_URL", ""), "has_transcribe_key": bool(vals.get("TRANSCRIBE_API_KEY")),
+        "local_whisper": _local_whisper(),
     }
 
 
@@ -590,8 +615,18 @@ class Handler(BaseHTTPRequestHandler):
                 for old in target.iterdir():
                     if old.is_file():
                         old.unlink()
-            data = self._body()
-            (target / f"{stem}{ext}").write_bytes(data)
+            n = int(self.headers.get("Content-Length") or 0)
+            if n > UPLOAD_LIMITS.get(kind, MAX_UPLOAD):
+                return self._err(f"{name} is too large ({n // 2**20} MB; limit {UPLOAD_LIMITS.get(kind, MAX_UPLOAD) // 2**20} MB)")
+            dest = target / f"{stem}{ext}"
+            with dest.open("wb") as fh:
+                left = n
+                while left > 0:
+                    chunk = self.rfile.read(min(1 << 20, left))
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+                    left -= len(chunk)
             self._json(talent_info(d.name))
         except ValueError as e:
             self._err(str(e))

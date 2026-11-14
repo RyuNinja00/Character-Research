@@ -6,3 +6,4 @@ ddgs>=9.0            # better DuckDuckGo search (falls back to DDG's HTML page w
 trafilatura>=1.8     # cleaner article text extraction
 pillow>=10.1         # initials on the placeholder avatar; lets --avatar take JPG/WEBP
 playwright>=1.45     # real-browser page reader (also run: python -m playwright install chromium, if you have no Chrome/Edge)
+faster-whisper>=1.0  # local, private audio transcription (optional; or use a transcription API)

@@ -100,7 +100,20 @@ class FakeLLM(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    transcribe_calls = 0
+
     def do_POST(self):
+        if self.path.endswith("/audio/transcriptions"):
+            raw = self.rfile.read(int(self.headers["Content-Length"]))
+            assert b'name="model"' in raw and b'filename=' in raw, "multipart upload expected"
+            FakeLLM.transcribe_calls += 1
+            data = b"This is Nova Test on the podcast. I talk fast and I love slow-burn teasing."
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         if self.path.endswith("/images/generations"):
             FakeLLM.image_prompt = body["prompt"]
@@ -338,6 +351,22 @@ class FakeWeb(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/html")
             self.end_headers()
             self.wfile.write(js_routes[self.path].encode())
+            return
+        if self.path == "/podcast-page":
+            body = (f'<html><head><meta property="og:audio" content="{b}/ep.mp3"></head><body><article><p>'
+                    + "Episode 12: Nova Test joins the show. " * 30 + "</p></article></body></html>")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body.encode())
+            return
+        if self.path == "/ep.mp3":
+            data = Path(FakeWeb.audio_file).read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/mpeg")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
             return
         if self.path.startswith("/magazine/interview"):
             body = ("<html><body><article><p>" + "Magazine interview with Nova Test. " * 30 +
@@ -672,6 +701,70 @@ def main():
                 sys.modules["ddgs"] = saved
             else:
                 del sys.modules["ddgs"]
+
+        # ── Audio: transcription API (with ffmpeg splitting), local Whisper, podcast pages, CLI integration
+        import shutil
+        import subprocess
+        from persona_forge import audio as amod
+        if shutil.which("ffmpeg"):
+            wav = Path(tmp) / "interview.wav"
+            long_wav = Path(tmp) / "long.wav"
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+                            "-ac", "1", "-ar", "16000", str(wav)], check=True)
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=70",
+                            "-ac", "1", "-ar", "16000", str(long_wav)], check=True)
+            FakeWeb.audio_file = str(wav)
+            cfg = amod.TranscribeConfig(engine="api", base_url=llm_url, model="whisper-1")
+            tr = amod.Transcriber(cfg, cache_dir=Path(tmp) / "acache")
+            before = FakeLLM.transcribe_calls
+            check("slow-burn teasing" in tr.transcribe(wav), "audio transcribed through an OpenAI-compatible API")
+            tr.transcribe(wav)
+            check(FakeLLM.transcribe_calls == before + 1, "transcripts cached (no second API call)")
+            big = amod.Transcriber(cfg, cache_dir=None, api_max_bytes=200_000)
+            before = FakeLLM.transcribe_calls
+            big.transcribe(long_wav)
+            check(FakeLLM.transcribe_calls - before >= 3, "long audio split with ffmpeg under the API size limit")
+
+            class _Seg:
+                def __init__(self, a, b, t): self.start, self.end, self.text = a, b, t
+            fake_fw = types.SimpleNamespace(WhisperModel=lambda *a, **k: types.SimpleNamespace(
+                transcribe=lambda path, language=None, vad_filter=True: (
+                    iter([_Seg(0, 20, "Hi, I'm Nova Test."), _Seg(20, 50, "I started streaming in 2019.")]),
+                    types.SimpleNamespace(duration=50.0))))
+            sys.modules["faster_whisper"] = fake_fw
+            try:
+                loc = amod.Transcriber(amod.TranscribeConfig(engine="auto"), cache_dir=None)
+                text = loc.transcribe(wav)
+                check(loc.engine == "local" and "[00:00:00] Hi, I'm Nova Test. I started streaming" in text,
+                      "auto picks local Whisper when installed; timestamped paragraphs")
+            finally:
+                del sys.modules["faster_whisper"]
+            try:
+                amod.Transcriber(amod.TranscribeConfig(engine="auto"), cache_dir=None)
+                check(False, "no engine should raise")
+            except amod.TranscriptionUnavailable as e:
+                check("faster-whisper" in str(e) and "Featherless" in str(e), "no engine → clear install/setup message")
+            html = ('<meta property="og:audio" content="/a.mp3"><audio src="b.m4a"></audio>'
+                    '<a href="https://cdn.x.com/c.mp3?x=1">dl</a>')
+            found = amod.find_page_audio(html, "https://pod.example.com/ep/1")
+            check(found[:3] == ["https://pod.example.com/a.mp3", "https://pod.example.com/ep/b.m4a",
+                                "https://cdn.x.com/c.mp3?x=1"], "podcast audio found on a page (og:audio, <audio>, links)")
+            sp = amod.find_page_audio("<html></html>", "https://pt-br.spreaker.com/episode/adult-film-star-x--49025109")
+            check(sp == ["https://api.spreaker.com/v2/episodes/49025109/download.mp3"], "Spreaker episode audio link derived")
+
+            alog = io.StringIO()
+            with contextlib.redirect_stderr(alog):
+                rc = cli.main(["Nova Test", "--talent", "--consent-note", "ok", "--no-web", "--audio", str(wav),
+                               "--url", web_url + "/podcast-page", "--transcribe-pages", "--transcriber", "api",
+                               "--transcribe-base-url", llm_url, "--base-url", llm_url, "--model", "f",
+                               "--out", tmp, "--no-cache", "--site-pages", "0"])
+            aout = Path(tmp) / "Nova_Test"
+            check(rc == 0 and len(list((aout / "transcripts").glob("*.txt"))) == 2,
+                  "uploaded audio + podcast on a page both transcribed; transcripts saved in output/transcripts/")
+            rv = (aout / "review.md").read_text()
+            check("Transcript: interview.wav" in rv, "transcript listed as a source in review.md")
+        else:
+            print("  (audio tests skipped: ffmpeg not installed)")
 
         # ── A page-reading model the provider doesn't know falls back to the main model
         fb = io.StringIO()

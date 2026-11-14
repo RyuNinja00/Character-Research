@@ -100,6 +100,24 @@ def build_parser() -> argparse.ArgumentParser:
                         "are added automatically. Used to recognise the creator's OWN adult-platform profiles.")
     g.add_argument("--descriptor", default="", help='Short "who is this" hint, e.g. "adult content creator and streamer"')
 
+    g = p.add_argument_group("audio (interviews, podcasts → transcripts)")
+    g.add_argument("--audio", action="append", default=[],
+                   help="Audio/video file or folder to transcribe and use as a source (mp3, m4a, wav, ogg, opus, mp4…)")
+    g.add_argument("--audio-url", action="append", default=[], help="Direct link to an audio file (e.g. a podcast .mp3)")
+    g.add_argument("--transcribe-pages", action="store_true",
+                   help="Also transcribe podcast/audio players found on pages you add with --url")
+    g.add_argument("--transcriber", choices=["auto", "local", "api", "off"], default=env("TRANSCRIBER", "auto"),
+                   help="local = faster-whisper on this computer (free, private); api = TRANSCRIBE_BASE_URL; "
+                        "auto = local if installed, else the API")
+    g.add_argument("--whisper-model", default=env("WHISPER_MODEL", "small"),
+                   help="Local Whisper size: tiny, base, small (default), medium, large-v3 – bigger = better, slower")
+    g.add_argument("--transcribe-base-url", default=env("TRANSCRIBE_BASE_URL", ""),
+                   help="OpenAI-compatible transcription API, e.g. https://api.openai.com/v1 or https://api.groq.com/openai/v1")
+    g.add_argument("--transcribe-api-key", default=env("TRANSCRIBE_API_KEY", ""))
+    g.add_argument("--transcribe-model", default=env("TRANSCRIBE_MODEL", "whisper-1"),
+                   help="API model, e.g. whisper-1, gpt-4o-transcribe, whisper-large-v3 (Groq)")
+    g.add_argument("--audio-language", default=env("AUDIO_LANGUAGE", ""), help="Spoken language code, e.g. en (empty = detect)")
+
     g = p.add_argument_group("LLM (any OpenAI-compatible endpoint)")
     g.add_argument("--base-url", default=env("LLM_BASE_URL", "https://api.openai.com/v1"))
     g.add_argument("--api-key", default=env("LLM_API_KEY", env("OPENAI_API_KEY", "")))
@@ -226,10 +244,74 @@ def _pick_wikipedia(r: Researcher, name: str, args) -> Source:
     return src
 
 
+class _Audio:
+    """Transcribes audio for one run; started only when there is audio to do."""
+
+    def __init__(self, args):
+        self.args = args
+        self.tr = None
+        self.failed = False
+        self.transcripts: list[tuple[str, str]] = []  # (file name, transcript) – saved to output/transcripts/
+
+    def _get(self):
+        if self.tr is None and not self.failed:
+            from .audio import TranscribeConfig, Transcriber, TranscriptionUnavailable
+
+            a = self.args
+            try:
+                self.tr = Transcriber(TranscribeConfig(a.transcriber, a.whisper_model, a.transcribe_base_url,
+                                                       a.transcribe_api_key, a.transcribe_model, a.audio_language),
+                                      cache_dir=None if a.no_cache else Path(a.cache_dir))
+                if self.tr.engine == "off":
+                    self.failed, self.tr = True, None
+                    log("  ! audio left out: transcription is switched off (--transcriber off)")
+            except TranscriptionUnavailable as e:
+                self.failed = True
+                log(f"  ! audio left out: {e}")
+        return self.tr
+
+    def source(self, path: Path, person: str, origin: str = "") -> Source | None:
+        from .audio import transcript_source_text
+
+        tr = self._get()
+        if not tr:
+            return None
+        try:
+            text = tr.transcribe(path)
+        except Exception as e:  # noqa: BLE001
+            log(f"  ! could not transcribe {path.name}: {e}")
+            return None
+        if not text.strip():
+            log(f"  ! {path.name}: no speech found")
+            return None
+        self.transcripts.append((path.stem, text))
+        return Source(url=origin or f"file://{path.resolve()}", title=f"Transcript: {path.name}",
+                      text=transcript_source_text(path.name, text, person, origin), kind="user")
+
+
 def gather_sources(r: Researcher, args) -> tuple[list[Source], str, str]:
     sources: list[Source] = []
     name = args.name
     descriptor = ""
+    audio = args._audio = _Audio(args)
+    from .audio import AUDIO_EXTS, download_audio, find_page_audio
+
+    audio_files: list[Path] = []
+    for a in args.audio:
+        p = Path(a)
+        if p.is_dir():
+            audio_files += sorted(f for f in p.iterdir() if f.is_file() and f.suffix.lower() in AUDIO_EXTS)
+        elif p.is_file():
+            audio_files.append(p)
+        else:
+            log(f"  ! audio {a}: not found")
+    for f in audio_files:
+        if src := audio.source(f, name):
+            sources.append(src)
+    for u in args.audio_url:
+        if f := download_audio(u, Path(args.cache_dir) / "audio", r.http):
+            if src := audio.source(f, name, origin=u):
+                sources.append(src)
 
     for f in args.file:
         src = load_local_file(f)
@@ -256,15 +338,24 @@ def gather_sources(r: Researcher, args) -> tuple[list[Source], str, str]:
         if q := r.wikiquote(wiki.title):
             log("→ Wikiquote page found")
             sources.append(q)
-    elif not (args.url or args.seed or args.file or (args.search_web and not args.no_web)):
+    elif not (args.url or args.seed or args.file or args.audio or args.audio_url
+              or (args.search_web and not args.no_web)):
         raise SystemExit("--talent / --no-wikipedia needs at least one --seed, --url or --file "
                          "(or --search-web / --deep to search the name).")
 
     if args.url:
-        user_pages = r.fetch_many([(u, "") for u in args.url], kind="user", keep_html=args.site_pages > 0)
+        user_pages = r.fetch_many([(u, "") for u in args.url], kind="user",
+                                  keep_html=args.site_pages > 0 or args.transcribe_pages)
         log(f"→ Loaded {len(user_pages)}/{len(args.url)} pages you supplied"
             + ("" if len(user_pages) == len(args.url) else " – see the ! lines above for why, and how to add the rest"))
         sources.extend(user_pages)
+        if args.transcribe_pages:  # podcast players and audio files on the pages you added
+            for page in user_pages:
+                for audio_url in find_page_audio(page.meta.get("html", ""), page.url):
+                    f = download_audio(audio_url, Path(args.cache_dir) / "audio", r.http)
+                    if f and (src := audio.source(f, name, origin=page.url)):
+                        sources.append(src)
+                        break
         sources.extend(r.follow_site_pages(user_pages, per_site=args.site_pages))
         for p in user_pages:
             p.meta.pop("html", None)
@@ -437,7 +528,13 @@ def card_sources(urls: list[str], talent: bool) -> list[str]:
     return [u for u in urls if u.startswith(("http://", "https://"))]
 
 
-def save_research(out: Path, slug: str, opts, dossier: dict, facts, source_urls: list[str]) -> None:
+def save_research(out: Path, slug: str, opts, dossier: dict, facts, source_urls: list[str],
+                  transcripts: list[tuple[str, str]] | None = None) -> None:
+    if transcripts:
+        tdir = out / "transcripts"
+        tdir.mkdir(exist_ok=True)
+        for name, text in transcripts:
+            (tdir / f"{slugify(name)[:60]}.txt").write_text(text + "\n", "utf-8")
     (out / "dossier.json").write_text(json.dumps(dossier, ensure_ascii=False, indent=2), "utf-8")
     (out / "sources.json").write_text(json.dumps(source_urls, indent=2), "utf-8")
     if facts:
@@ -566,7 +663,8 @@ def main(argv: list[str] | None = None) -> int:
         source_urls = [s.url for s in used]
         out_early = Path(args.out) / slugify(opts.name)
         out_early.mkdir(parents=True, exist_ok=True)
-        save_research(out_early, slugify(opts.name), opts, dossier, facts, source_urls)
+        save_research(out_early, slugify(opts.name), opts, dossier, facts, source_urls,
+                      getattr(getattr(args, "_audio", None), "transcripts", None))
         save_run_settings(out_early, args, boundaries)
         (out_early / "review.md").write_text(write_review(opts, facts, *review_inputs, gap_report=gap_report), "utf-8")
         log(f"→ Research saved to {out_early}/ (dossier.json, review.md)")
@@ -641,7 +739,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     (out / f"{slug}.lorebook.json").write_text(json.dumps(lorebook, ensure_ascii=False, indent=2), "utf-8")
     if not args.from_dossier:
-        save_research(out, slug, opts, dossier, facts, source_urls)
+        save_research(out, slug, opts, dossier, facts, source_urls,
+                      getattr(getattr(args, "_audio", None), "transcripts", None))
     save_run_settings(out, args, boundaries)
     if review_inputs:
         review = write_review(opts, facts, *review_inputs, gap_report=gap_report)

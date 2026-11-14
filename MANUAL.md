@@ -17,6 +17,7 @@ web UI (Part 3b).** Parts 4 onward cover the command line and the details behind
 8. Edit and rebuild without re-researching
 9. Import into Marinara and set it up
 10. Sprites and images
+10b. Audio: interviews and podcasts
 11. Every option, grouped
 12. Troubleshooting
 13. Time, cost and tips
@@ -603,6 +604,46 @@ restored when it's imported. The limit is 256 images, 8 MB each.
 
 ---
 
+## 10b. Audio: interviews and podcasts
+
+Spoken interviews are often the best source for someone's voice. The app can listen to them: audio is
+turned into text (transcribed), then used like any interview.
+
+### Pick a transcription engine (once)
+
+Featherless only has text models, so audio needs its own engine:
+
+| Engine | Setup | Notes |
+| --- | --- | --- |
+| **Local Whisper** (recommended) | `pip install faster-whisper` | Free and **private**: the audio never leaves your computer. The first use downloads the model (about 0.5 GB for "small"). On a normal laptop, "small" takes roughly a third to half of the audio's length. |
+| **Transcription API** | In `.env`: `TRANSCRIBE_BASE_URL`, `TRANSCRIBE_API_KEY`, `TRANSCRIBE_MODEL` | Any OpenAI-compatible `/audio/transcriptions` service. Groq: `https://api.groq.com/openai/v1` with `whisper-large-v3` (fast, cheap). OpenAI: `https://api.openai.com/v1` with `whisper-1`. Long files are split automatically, which needs [ffmpeg](https://ffmpeg.org/download.html). |
+
+**Auto** (the default) uses local Whisper if it's installed, otherwise the API. In the web UI these settings are in
+section 5, and a green note there tells you which engine is ready.
+
+### Add audio
+
+- **Your files:** drop them into **Audio & video** in section 3 of the web UI (mp3, m4a, wav, ogg, opus, flac,
+  mp4…, up to 1 GB each), or use `--audio file-or-folder` on the command line. They're saved in
+  `talent/<name>/audio/`.
+- **Podcast pages:** with **Transcribe podcasts on pages I add** ticked (the default in the web UI;
+  `--transcribe-pages` on the command line), any **Extra page** with a podcast player or audio file has its
+  audio downloaded and transcribed. That includes Spreaker episode pages.
+- **A direct audio link:** `--audio-url https://…/episode.mp3`.
+- **YouTube** can't be downloaded. On the video, click **… → Show transcript**, copy it into a `.txt` and add it
+  under **Text sources**.
+
+### What you get
+
+- Transcripts are saved in `output/<Name>/transcripts/` with a timestamp about every 45 seconds, and they're
+  listed as sources in `review.md`.
+- Transcripts are cached, so a re-run doesn't transcribe the same audio again.
+- Transcription can't tell who is speaking (an interviewer versus the creator). The AI is told this and only
+  credits statements that clearly come from the person, such as answers about their own life and opinions.
+- The progress bar shows **Transcribing audio**, and the console shows progress every 5 minutes of audio.
+
+---
+
 ## 11. Every option, grouped
 
 Run `python -m persona_forge --help` for the full list. These are the main options.
@@ -634,6 +675,8 @@ Run `python -m persona_forge --help` for the full list. These are the main optio
 | `--talent` | Managed-creator mode. Skips Wikipedia and applies the creator-safety rules. Needs `--consent-note`. |
 | `--consent-note "..."` | Who authorised the card. Stored in the card. |
 | `--nsfw` | 18+ card. Adds adult-platform research and content themes. |
+| `--audio F` / `--audio-url U` / `--transcribe-pages` | Audio files or folders, direct audio links, and podcast players on pages you add, all transcribed and used as sources. |
+| `--transcriber auto\|local\|api\|off`, `--whisper-model`, `--audio-language` | Transcription engine, local Whisper size (tiny…large-v3), and spoken language (empty = detect). |
 | `--browser auto\|visible\|always\|off` | Page reader: real browser when needed (default), with a visible window so you can complete human checks, for every page you chose, or never. |
 | `--confirm-adult` / `--no-age-click` | Answer simple "Are you 18?" click-through pages (on by default with `--nsfw`), or never answer them. Real ID/face/card verification is never bypassed. |
 | `--boundaries F` | Hard limits, added word for word to the card's system prompt. |
@@ -698,6 +741,9 @@ Run `python -m persona_forge --help` for the full list. These are the main optio
 | "the site asked to verify you're human" | Set **Page reader → Visible browser** (or `--browser visible`). A browser window opens when the site asks, so complete the check yourself and the run continues. |
 | "Real-browser reader not available" | Run `pip install playwright`. If you have neither Chrome nor Edge, also run `python -m playwright install chromium`. |
 | A page you chose is "almost no readable text" | It's probably built with JavaScript. The **Smart** page reader opens it in the real browser automatically once Playwright is installed. Or choose **Always**. |
+| "audio left out: no transcription engine" | Run `pip install faster-whisper` (free, private), or set `TRANSCRIBE_BASE_URL` and `TRANSCRIBE_API_KEY` in `.env`. Featherless can't transcribe. |
+| "larger than the API's ~25 MB limit and ffmpeg isn't installed" | Install ffmpeg (ffmpeg.org; Windows: `winget install ffmpeg`; Mac: `brew install ffmpeg`), or use local Whisper. |
+| A podcast page's audio isn't found | Some players hide the file. Find the episode's download link (often under ⋯ or "Download") and add it with `--audio-url`, or download the file and drop it under **Audio & video**. |
 | "Are you 18?" page instead of content | With **18+ adult card** on (or the **I'm 18+** box ticked in the web UI, which is the default), the app answers simple click-through age pages for you: it sets the usual "verified" cookie, or clicks the site's own "Enter / I am 18" link or button. Use `--confirm-adult` on the command line for non-NSFW runs, or `--no-age-click` to turn it off. |
 | "the site uses real age verification" | The site requires an ID, face or card check (often required by law in some regions). The app never bypasses these. Open the page in your browser, complete the check yourself, save the page (Ctrl+S) and add it under **Text sources**. |
 | YouTube link gives little | Only a video's title and description can be read, not what's said. On YouTube click **… → Show transcript**, copy it into a `.txt` and add it under **Text sources**. |

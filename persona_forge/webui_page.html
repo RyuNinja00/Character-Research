@@ -224,6 +224,9 @@
           </select>
           <div class="hint">The real browser reads pages like you do in Chrome. It runs JavaScript, keeps cookies between runs, and reads at a human pace. With <b>Visible browser</b>, a window opens when a site wants a person, and the run waits for you. Needs <code>pip install playwright</code>.</div>
         </div>
+        <div class="check"><input type="checkbox" id="transcribe_pages" name="transcribe_pages" checked><div>
+          <label for="transcribe_pages">Transcribe podcasts on pages I add</label>
+          <div class="hint">If an Extra page has a podcast player or audio file (e.g. Spreaker), it's downloaded and transcribed too. YouTube can't be downloaded: paste its transcript under Text sources.</div></div></div>
         <div class="check"><input type="checkbox" id="confirm_adult" name="confirm_adult" checked><div>
           <label for="confirm_adult">I'm 18+: answer “Are you 18?” pages</label>
           <div class="hint">Lets the app click “Enter / I am 18” on adult sites for you. Sites that need real ID, face or card verification are never bypassed; save those pages from your browser.</div></div></div>
@@ -280,6 +283,12 @@
           <div class="drop" data-kind="sources"><input type="file" multiple accept=".txt,.md,.json,.html,.htm"></div>
           <div class="chips" id="files-sources"></div>
           <div class="hint">Transcripts, Q&amp;As, saved web pages (Ctrl+S → “HTML only”), YouTube transcripts (.txt .md .json .html). Treated as authoritative.</div>
+        </div>
+        <div class="field">
+          <label>Audio &amp; video</label>
+          <div class="drop" data-kind="audio"><input type="file" multiple accept="audio/*,video/*,.mp3,.m4a,.wav,.ogg,.opus,.flac,.aac,.mp4,.webm"></div>
+          <div class="chips" id="files-audio"></div>
+          <div class="hint">Interviews, podcasts, stream clips, voice notes (mp3 m4a wav ogg opus flac mp4…, up to 1 GB). Transcribed and used like an interview. Transcripts are saved in <code>output/…/transcripts/</code>.</div>
         </div>
         <div>
           <div class="check"><input type="checkbox" id="avatar_from_reference" name="avatar_from_reference" checked><div>
@@ -432,6 +441,50 @@
           <label for="image_model">Image model</label>
           <input type="text" id="image_model" name="image_model" placeholder="e.g. gpt-image-1">
           <div class="envnote" id="env-image_model"></div><div class="hint">Any /images/generations model.</div>
+        </div>
+      </div>
+      <div class="grid3">
+        <div class="field">
+          <label for="transcriber">Audio transcription</label>
+          <select id="transcriber" name="transcriber">
+            <option value="">Auto: local Whisper if installed, else the API below</option>
+            <option value="local">Local Whisper (free, private)</option>
+            <option value="api">Transcription API</option>
+            <option value="off">Off: ignore audio</option>
+          </select>
+          <div class="envnote" id="env-transcriber"></div>
+          <div class="hint">Featherless has no audio models. Local = <code>pip install faster-whisper</code>; audio never leaves this computer.</div>
+        </div>
+        <div class="field">
+          <label for="whisper_model">Local Whisper size</label>
+          <select id="whisper_model" name="whisper_model">
+            <option value="">Default (small)</option><option value="base">base: fastest, rougher</option>
+            <option value="small">small: good balance</option><option value="medium">medium: better, slower</option>
+            <option value="large-v3">large-v3: best, needs a strong computer</option>
+          </select>
+          <div class="hint">On a normal laptop, “small” takes roughly a third to half of the audio's length.</div>
+        </div>
+        <div class="field">
+          <label for="audio_language">Spoken language</label>
+          <input type="text" id="audio_language" name="audio_language" placeholder="e.g. en">
+          <div class="hint">Empty = detect automatically.</div>
+        </div>
+        <div class="field">
+          <label for="transcribe_base_url">Transcription API URL</label>
+          <input type="text" id="transcribe_base_url" name="transcribe_base_url" placeholder="e.g. https://api.groq.com/openai/v1">
+          <div class="envnote" id="env-transcribe_base_url"></div>
+          <div class="hint">Only for the API option. OpenAI or Groq (fast and cheap) both work.</div>
+        </div>
+        <div class="field">
+          <label for="transcribe_api_key">Transcription API key</label>
+          <input type="password" id="transcribe_api_key" name="transcribe_api_key" placeholder="e.g. gsk_…">
+          <div class="envnote" id="env-transcribe_api_key"></div>
+          <div class="hint">Never stored in the creator folder.</div>
+        </div>
+        <div class="field">
+          <label for="transcribe_model">Transcription model</label>
+          <input type="text" id="transcribe_model" name="transcribe_model" placeholder="e.g. whisper-large-v3 (Groq) or whisper-1 (OpenAI)">
+          <div class="hint">Empty = whisper-1.</div>
         </div>
       </div>
       <div class="check"><input type="checkbox" id="save_env" name="save_env"><div>
@@ -626,7 +679,7 @@ function showErrors(list) {
 }
 
 function renderFiles(info) {
-  for (const kind of ["references", "avatar", "sprites", "fullbody", "sources"]) {
+  for (const kind of ["references", "avatar", "sprites", "fullbody", "sources", "audio"]) {
     const box = $("#files-" + kind); box.innerHTML = "";
     (info.files[kind] || []).forEach(name => {
       const chip = document.createElement("span"); chip.className = "chip"; chip.textContent = name;
@@ -669,10 +722,13 @@ async function loadTalents(select) {
   note("image_base_url", e.image_base_url ? "If empty, uses your .env: " + e.image_base_url : "");
   note("image_model", e.image_model ? "If empty, uses your .env: " + e.image_model : "");
   note("max_tokens", e.max_tokens ? "If empty, uses your .env: " + e.max_tokens : "");
+  note("transcriber", e.local_whisper ? "Local Whisper is installed ✓" : (e.transcribe_base_url ? "Local Whisper not installed: Auto will use the API in .env." : "Local Whisper not installed and no API set: audio would be skipped."), !e.local_whisper && !e.transcribe_base_url);
+  note("transcribe_base_url", e.transcribe_base_url ? "If empty, uses your .env: " + e.transcribe_base_url : "");
+  note("transcribe_api_key", e.has_transcribe_key ? "If empty, uses the key saved in your .env." : "");
 }
 $("#talentPicker").addEventListener("change", async e => {
   if (!e.target.value) { form.reset(); slug = ""; applyMode(); $("#brief").value = $("#limits").value = $("#urls").value = "";
-    ["references","avatar","sprites","fullbody","sources"].forEach(k => $("#files-" + k).innerHTML = ""); renderOutputs([]);
+    ["references","avatar","sprites","fullbody","sources","audio"].forEach(k => $("#files-" + k).innerHTML = ""); renderOutputs([]);
     $("#folder").textContent = ""; $("#btnRebuild").disabled = true; return; }
   const info = await api("/api/talent/" + e.target.value);
   fill({ name: info.settings.name, ...info.settings }); applyInfo(info); toast("Loaded " + (info.settings.name || info.slug));
@@ -733,6 +789,7 @@ function colour(line) {
 // Progress: the app logs each stage; map them to a percentage and a plain-English label.
 const STAGES = [
   [/Reusing settings|Creator source|Link hub|Wikipedia:|Loaded \d+\/\d+ pages|Following|Adult-platform|Reading \d+ web pages|Handles found/, 8, "Reading the sources"],
+  [/Transcribing /, 10, "Transcribing audio"],
   [/Extracting facts from/, 18, "Reading pages with the AI"],
   [/Conglomerating/, 46, "Building the profile"],
   [/Profile coverage/, 52, "Checking what's missing"],

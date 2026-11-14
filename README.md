@@ -9,6 +9,8 @@ historical figures and well-documented fictional characters.
 
 **Prefer a form?** Run `python -m persona_forge.webui` for a local web UI with a box and an example for every option. It creates a `talent/<name>/` folder for each creator and keeps everything for that creator in it.
 
+**Audio:** add interviews and podcasts (files or podcast pages). They're transcribed, locally with `pip install faster-whisper` or through any OpenAI-compatible transcription API, and used as sources.
+
 ```
 python -m persona_forge "Ada Lovelace" --era 1843 --push
 ```
