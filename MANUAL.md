@@ -105,7 +105,7 @@ The app reads its settings from a file called `.env` in the project folder.
 
 | Use | Suggested setup |
 | --- | --- |
-| **Adult creator cards (`--nsfw`)** | **OpenRouter** with a model that permits adult content, or a capable **local model**. Mainstream models (OpenAI, Anthropic, Google) often refuse adult extraction and writing. |
+| **Adult creator cards (`--nsfw`)** | **Featherless.ai** (example below), **OpenRouter** with a model that permits adult content, or a capable **local model**. Mainstream models (OpenAI, Anthropic, Google) often refuse adult extraction and writing. |
 | SFW cards (public figures, fictional characters) | Any good model: OpenAI, Anthropic, OpenRouter or DeepSeek. |
 | Free / private | A local model in Ollama or LM Studio. Use 14B parameters or more for decent cards. |
 
@@ -117,6 +117,48 @@ LLM_API_KEY=sk-or-...
 LLM_MODEL=<a model id from openrouter.ai/models>
 LLM_EXTRACT_MODEL=<a cheaper model id, optional>
 ```
+
+**Featherless.ai example (recommended for adult creator cards):**
+
+Featherless is a flat-price service for open-weight models that uses the same API format as OpenAI, so it
+works with no code changes. Many of its models are uncensored, so they don't refuse adult extraction or writing.
+
+```ini
+LLM_BASE_URL=https://api.featherless.ai/v1
+LLM_API_KEY=your-featherless-key
+LLM_MODEL=huihui-ai/Huihui-Qwen3.5-27B-abliterated
+LLM_MAX_TOKENS=6144
+LLM_JSON_MODE=auto
+```
+
+Then add `--workers 2` to your commands (see the notes below). A full creator run looks like this:
+
+```bash
+python -m persona_forge "Ivy Wren" --talent --nsfw --deep --workers 2 \
+  --seed https://linktr.ee/iivywren --descriptor "adult content creator" \
+  --boundaries talent/ivy_wren/limits.txt \
+  --consent-note "Authorised by Ivy Wren (release on file), 2026-11-14" --style chat
+```
+
+Featherless notes:
+
+- **Concurrency (`--workers`):** Featherless limits how many requests run at once with *concurrent units*.
+  Each request reserves units based on model size, so bigger models allow fewer parallel requests. The
+  $25 Chat plan has 4 units. A ~27B model most likely costs 2 units, so `--workers 2` should use the plan
+  fully without throttling. Check the exact cost on the model's page: use `--workers 4` if it's 1 unit, or
+  `--workers 1` if it's 4. On the Developer or Pay-As-You-Go plans
+  you can raise `--workers`. To see your limits, call `GET https://api.featherless.ai/v1/plan` with your key.
+- **Context:** the Chat plan serves models with up to 32K context, prompt plus reply together.
+  `LLM_MAX_TOKENS=6144` leaves room for the app's largest requests. Don't use models served at 4K or 8K; the
+  model page shows the context size.
+- **One model or two:** the 27B model above handles every step well. To save time, set
+  `LLM_EXTRACT_MODEL=TrevorJS/gemma-4-26B-A4B-it-uncensored`, a fast mixture-of-experts model, for the
+  page-reading step.
+- **Different writing voice:** if the card's prose feels flat, rebuild just the writing with a creative-writing
+  model. Your research stays as it is:
+  `python -m persona_forge --from-dossier output/Ivy_Wren/dossier.json --model huihui-ai/Huihui-Mistral-Small-3.2-24B-Instruct-2506-abliterated`
+- **Images:** Featherless is text-only. `--generate-avatar` needs a separate image service in the `IMAGE_*` settings.
+  Everything else (card, lorebook, sprite kit) works without one.
 
 **Local (Ollama) example:**
 
