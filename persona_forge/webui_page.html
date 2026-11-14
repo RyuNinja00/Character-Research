@@ -465,6 +465,15 @@
           <div class="hint">On a normal laptop, “small” takes roughly a third to half of the audio's length.</div>
         </div>
         <div class="field">
+          <label for="whisper_device">Local Whisper runs on</label>
+          <select id="whisper_device" name="whisper_device">
+            <option value="">Auto: NVIDIA GPU if it works, else CPU</option>
+            <option value="cpu">CPU (always works)</option>
+            <option value="cuda">NVIDIA GPU (needs CUDA libraries)</option>
+          </select>
+          <div class="hint">If the GPU's libraries are missing (e.g. “cublas64_12.dll not found”), Auto switches to the CPU by itself. Pick CPU to skip the check.</div>
+        </div>
+        <div class="field">
           <label for="audio_language">Spoken language</label>
           <input type="text" id="audio_language" name="audio_language" placeholder="e.g. en">
           <div class="hint">Empty = detect automatically.</div>

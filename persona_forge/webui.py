@@ -350,6 +350,8 @@ def build_command(slug: str, form: dict, rebuild: bool = False) -> tuple[list[st
                       ("transcribe_model", "--transcribe-model"), ("audio_language", "--audio-language")):
         if _s(form, key):
             a += [flag, _s(form, key)]
+    if _s(form, "whisper_device") in ("auto", "cpu", "cuda"):
+        a += ["--whisper-device", _s(form, "whisper_device")]
     if _s(form, "transcriber") in ("auto", "local", "api", "off"):
         a += ["--transcriber", _s(form, "transcriber")]
     if _files(d, "sprites", IMAGE_EXTS) or _files(d, "sprites/full-body", IMAGE_EXTS):
@@ -373,7 +375,7 @@ def save_env(form: dict) -> list[str]:
                "image_base_url": "IMAGE_BASE_URL", "image_api_key": "IMAGE_API_KEY", "image_model": "IMAGE_MODEL",
                "marinara_user": "MARINARA_USER", "marinara_pass": "MARINARA_PASS",
                "transcribe_base_url": "TRANSCRIBE_BASE_URL", "transcribe_api_key": "TRANSCRIBE_API_KEY",
-               "transcribe_model": "TRANSCRIBE_MODEL", "whisper_model": "WHISPER_MODEL"}
+               "transcribe_model": "TRANSCRIBE_MODEL", "whisper_model": "WHISPER_MODEL", "whisper_device": "WHISPER_DEVICE"}
     updates = {var: _s(form, key) for key, var in mapping.items() if _s(form, key)}
     if not updates:
         return []

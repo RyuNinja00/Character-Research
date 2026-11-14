@@ -621,6 +621,27 @@ Featherless only has text models, so audio needs its own engine:
 **Auto** (the default) uses local Whisper if it's installed, otherwise the API. In the web UI these settings are in
 section 5, and a green note there tells you which engine is ready.
 
+### Using an NVIDIA GPU (optional, faster)
+
+Local Whisper tries your NVIDIA graphics card first. On Windows this often fails with an error like
+`cublas64_12.dll is not found`, because the GPU needs NVIDIA's **cuBLAS for CUDA 12** and **cuDNN 9 for CUDA 12**
+libraries, which Windows doesn't include. **The app then switches to the CPU on its own and carries on.** To skip
+the GPU attempt, set **Local Whisper runs on → CPU** (`--whisper-device cpu`, or `WHISPER_DEVICE=cpu` in `.env`).
+
+To actually use the GPU, which is several times faster, give it the libraries in one of these ways, then set
+**Local Whisper runs on → NVIDIA GPU**:
+
+1. **Easiest:** on GitHub, open **Purfview / whisper-standalone-win → Releases → "libs"** and download the
+   **cuBLAS and cuDNN archive for CUDA 12**. Unzip the `.dll` files into a folder called **`cuda_libs`** inside
+   the project folder. The app finds them there automatically (the folder is git-ignored).
+2. **Through pip:** run `pip install nvidia-cublas-cu12 nvidia-cudnn-cu12==9.*`. The app adds those packages'
+   DLL folders automatically. If NVIDIA doesn't publish Windows files for your version, use option 1.
+3. **NVIDIA's installers:** install the **CUDA Toolkit 12** and **cuDNN 9 for CUDA 12** from developer.nvidia.com,
+   add the cuDNN `bin` folder to your Windows `PATH`, and restart.
+
+Also keep your NVIDIA driver up to date. Newer cards (e.g. the RTX 50 series) need recent CUDA 12 libraries.
+If the GPU still fails, the console shows the error and the run continues on the CPU.
+
 ### Add audio
 
 - **Your files:** drop them into **Audio & video** in section 3 of the web UI (mp3, m4a, wav, ogg, opus, flac,
@@ -741,6 +762,7 @@ Run `python -m persona_forge --help` for the full list. These are the main optio
 | "the site asked to verify you're human" | Set **Page reader → Visible browser** (or `--browser visible`). A browser window opens when the site asks, so complete the check yourself and the run continues. |
 | "Real-browser reader not available" | Run `pip install playwright`. If you have neither Chrome nor Edge, also run `python -m playwright install chromium`. |
 | A page you chose is "almost no readable text" | It's probably built with JavaScript. The **Smart** page reader opens it in the real browser automatically once Playwright is installed. Or choose **Always**. |
+| `could not transcribe … cublas64_12.dll is not found` (older versions) | Fixed: the app now switches to the CPU by itself. To use the GPU, see **10b → Using an NVIDIA GPU**. Or set **Local Whisper runs on → CPU** to skip the GPU. |
 | "audio left out: no transcription engine" | Run `pip install faster-whisper` (free, private), or set `TRANSCRIBE_BASE_URL` and `TRANSCRIBE_API_KEY` in `.env`. Featherless can't transcribe. |
 | "larger than the API's ~25 MB limit and ffmpeg isn't installed" | Install ffmpeg (ffmpeg.org; Windows: `winget install ffmpeg`; Mac: `brew install ffmpeg`), or use local Whisper. |
 | A podcast page's audio isn't found | Some players hide the file. Find the episode's download link (often under ⋯ or "Download") and add it with `--audio-url`, or download the file and drop it under **Audio & video**. |

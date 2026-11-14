@@ -111,6 +111,8 @@ def build_parser() -> argparse.ArgumentParser:
                         "auto = local if installed, else the API")
     g.add_argument("--whisper-model", default=env("WHISPER_MODEL", "small"),
                    help="Local Whisper size: tiny, base, small (default), medium, large-v3 – bigger = better, slower")
+    g.add_argument("--whisper-device", choices=["auto", "cpu", "cuda"], default=env("WHISPER_DEVICE", "auto"),
+                   help="Local Whisper: auto = NVIDIA GPU if it works, else CPU (automatic fallback); cpu; cuda")
     g.add_argument("--transcribe-base-url", default=env("TRANSCRIBE_BASE_URL", ""),
                    help="OpenAI-compatible transcription API, e.g. https://api.openai.com/v1 or https://api.groq.com/openai/v1")
     g.add_argument("--transcribe-api-key", default=env("TRANSCRIBE_API_KEY", ""))
@@ -260,7 +262,8 @@ class _Audio:
             a = self.args
             try:
                 self.tr = Transcriber(TranscribeConfig(a.transcriber, a.whisper_model, a.transcribe_base_url,
-                                                       a.transcribe_api_key, a.transcribe_model, a.audio_language),
+                                                       a.transcribe_api_key, a.transcribe_model, a.audio_language,
+                                                       a.whisper_device),
                                       cache_dir=None if a.no_cache else Path(a.cache_dir))
                 if self.tr.engine == "off":
                     self.failed, self.tr = True, None

@@ -739,6 +739,37 @@ def main():
                       "auto picks local Whisper when installed; timestamped paragraphs")
             finally:
                 del sys.modules["faster_whisper"]
+            # GPU without NVIDIA libraries (Windows: "cublas64_12.dll is not found") → automatic CPU fallback
+            loads = []
+
+            def _model(name, device="auto", compute_type="default"):
+                loads.append((device, compute_type))
+
+                def _tr(path, language=None, vad_filter=True):
+                    def gen():
+                        if device != "cpu":
+                            raise RuntimeError("Library cublas64_12.dll is not found or cannot be loaded")
+                        yield _Seg(0, 10, "Hello from the CPU.")
+                    return gen(), types.SimpleNamespace(duration=10.0)
+                return types.SimpleNamespace(transcribe=_tr)
+
+            sys.modules["faster_whisper"] = types.SimpleNamespace(WhisperModel=_model)
+            try:
+                glog = io.StringIO()
+                with contextlib.redirect_stderr(glog):
+                    gpu = amod.Transcriber(amod.TranscribeConfig(engine="local"), cache_dir=None)
+                    text = gpu.transcribe(wav)
+                check("Hello from the CPU." in text and loads == [("auto", "default"), ("cpu", "int8")],
+                      "missing cublas64_12.dll → switched to CPU automatically")
+                check("Switching to the CPU" in glog.getvalue(), "GPU fallback explained in the log")
+                loads.clear()
+                gpu.transcribe(long_wav)
+                check(loads == [], "stays on the CPU for the rest of the run (no reload)")
+                loads.clear()
+                amod.Transcriber(amod.TranscribeConfig(engine="local", device="cpu"), cache_dir=None).transcribe(wav)
+                check(loads == [("cpu", "int8")], "Whisper device = CPU skips the GPU entirely")
+            finally:
+                del sys.modules["faster_whisper"]
             try:
                 amod.Transcriber(amod.TranscribeConfig(engine="auto"), cache_dir=None)
                 check(False, "no engine should raise")

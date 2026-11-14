@@ -46,11 +46,43 @@ class TranscribeConfig:
     api_key: str = ""
     model: str = "whisper-1"
     language: str = ""              # e.g. "en"; empty = detect
+    device: str = "auto"            # local: auto (GPU if it works, else CPU) | cpu | cuda
 
 
 def _fmt(seconds: float) -> str:
     seconds = int(seconds)
     return f"{seconds // 3600:02d}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
+
+
+GPU_ERROR_RE = re.compile(r"(cublas|cudnn|cuda|cudart|CUBLAS_STATUS|nvcuda|no CUDA|libcu|\.dll)", re.I)
+
+
+def add_windows_cuda_paths() -> list[str]:
+    """Windows: make NVIDIA DLLs findable – from pip packages (nvidia-cublas-cu12, nvidia-cudnn-cu12), from a
+    cuda_libs/ folder in the project (e.g. the unpacked cuBLAS/cuDNN archive), or a CUDA_LIBS_DIR you set."""
+    import os
+    import sys
+
+    if os.name != "nt":
+        return []
+    dirs: list[Path] = []
+    if os.environ.get("CUDA_LIBS_DIR"):
+        dirs.append(Path(os.environ["CUDA_LIBS_DIR"]))
+    dirs.append(Path(__file__).resolve().parents[1] / "cuda_libs")
+    for sp in map(Path, sys.path):
+        nv = sp / "nvidia"
+        if nv.is_dir():
+            dirs += [d / "bin" for d in nv.iterdir() if (d / "bin").is_dir()]
+    added = []
+    for d in dirs:
+        if d.is_dir() and any(d.glob("*.dll")):
+            try:
+                os.add_dll_directory(str(d))  # type: ignore[attr-defined]
+            except (OSError, AttributeError):
+                pass
+            os.environ["PATH"] = str(d) + os.pathsep + os.environ.get("PATH", "")
+            added.append(str(d))
+    return added
 
 
 class Transcriber:
@@ -59,6 +91,7 @@ class Transcriber:
         self.cache_dir = cache_dir
         self.api_max_bytes = api_max_bytes
         self._local_model = None
+        self.device = cfg.device or "auto"
         self.engine = self._resolve()
 
     # ── which engine
@@ -103,12 +136,36 @@ class Transcriber:
         return text
 
     # ── local faster-whisper
-    def _local(self, path: Path) -> str:
+    def _load_local(self):
         from faster_whisper import WhisperModel  # type: ignore
 
-        if self._local_model is None:
-            log(f"  … loading Whisper “{self.cfg.whisper_model}” (first time downloads the model)")
-            self._local_model = WhisperModel(self.cfg.whisper_model, device="auto", compute_type="auto")
+        if self.device in ("auto", "cuda"):
+            added = add_windows_cuda_paths()
+            if added:
+                log(f"  … NVIDIA libraries found in: {', '.join(added)}")
+        compute = {"cuda": "float16", "cpu": "int8"}.get(self.device, "default")
+        log(f"  … loading Whisper “{self.cfg.whisper_model}” on {self.device.upper() if self.device != 'auto' else 'GPU if available, else CPU'}"
+            " (first time downloads the model)")
+        return WhisperModel(self.cfg.whisper_model, device=self.device, compute_type=compute)
+
+    def _local(self, path: Path) -> str:
+        for attempt in range(2):
+            try:
+                if self._local_model is None:
+                    self._local_model = self._load_local()
+                return self._local_run(path)
+            except Exception as e:  # noqa: BLE001
+                if attempt == 0 and self.device != "cpu" and GPU_ERROR_RE.search(str(e)):
+                    log(f"  ! The graphics card (GPU) can't be used for transcription: {str(e)[:140]}")
+                    log("    Switching to the CPU – this always works, just slower. To use the GPU instead, see the "
+                        "manual: “Audio → Using an NVIDIA GPU”, or set Whisper device → CPU to skip this check.")
+                    self.device = "cpu"
+                    self._local_model = None
+                    continue
+                raise
+        raise RuntimeError("transcription failed")
+
+    def _local_run(self, path: Path) -> str:
         segments, info = self._local_model.transcribe(str(path), language=self.cfg.language or None, vad_filter=True)
         duration = float(getattr(info, "duration", 0) or 0)
         lines, next_report, block, block_start = [], 300.0, [], None
