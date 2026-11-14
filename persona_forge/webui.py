@@ -284,6 +284,8 @@ def build_command(slug: str, form: dict, rebuild: bool = False) -> tuple[list[st
             if rebuild and key in ("deep", "search_web", "no_web"):
                 continue
             a.append(flag)
+    if not rebuild:  # "I'm 18+" box: answer simple “Are you 18?” pages (never real ID/face/card checks)
+        a.append("--confirm-adult" if form.get("confirm_adult", True) not in (False, "false", "0", 0, "") else "--no-age-click")
     if _flag(form, "audience_research") and mode == "talent" and not rebuild and not _flag(form, "no_web"):
         a.append("--audience-research")
 

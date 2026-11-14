@@ -117,6 +117,11 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--consent-note", default="",
                    help='Who authorised this card, e.g. "Approved by <creator> via <agency>, 2026-11-14" (required with --talent)')
     g.add_argument("--nsfw", action="store_true", help="18+ card: allow adult themes (adults only)")
+    g.add_argument("--confirm-adult", action="store_true",
+                   help="I am 18+: let the page reader answer simple “Are you 18?” click-through pages "
+                        "(on by default with --nsfw). Real ID/face/card age verification is never bypassed.")
+    g.add_argument("--no-age-click", action="store_true",
+                   help="Never answer “Are you 18?” pages, even with --nsfw")
     g.add_argument("--audience-research", action="store_true",
                    help="Also write a separate audience_report.md: what fans/the public say about the creator's content "
                         "(themes, praise, requests, criticism) found under the stage name and handles. Never used in the card.")
@@ -523,6 +528,7 @@ def main(argv: list[str] | None = None) -> int:
             searxng_url=args.searxng_url,
             brave_key=args.brave_key,
             tavily_key=args.tavily_key,
+            confirm_adult=(args.nsfw or args.confirm_adult) and not args.no_age_click,
         )
         sources, opts.name, desc = gather_sources(r, args)
         opts.descriptor = desc or opts.descriptor

@@ -258,6 +258,9 @@ class FakeWeb(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    def do_POST(self):
+        self.do_GET()
+
     def do_GET(self):
         b = FakeWeb.base
         if self.path.startswith("/picky"):  # firewall: needs normal browser headers
@@ -277,6 +280,33 @@ class FakeWeb(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write((("<html><body><article><p>" + "Flaky Nova Test page. " * 30 + "</p></article></body></html>")
                               if ok else "down").encode())
+            return
+        cookies = self.headers.get("Cookie") or ""
+        article = "<html><head><title>Interview</title></head><body><article><p>" + "Nova Test talks about her career. " * 40 + "</p></article></body></html>"
+        gate = ("<html><head><title>Age Verification</title></head><body><h1>Are you 18 or older?</h1>"
+                "This website contains adult content.{extra}</body></html>")
+        routes = {
+            "/gated": ("age_verified=1" in cookies, gate.format(extra="")),                      # cookie-style gate
+            "/gated2": ("g2=ok" in cookies, gate.format(extra='<a href="/leave">Leave</a> <a href="/enter2">I am 18 – Enter</a>')),
+            "/gated3": ("g3=ok" in cookies, gate.format(extra='<form method="post" action="/verify3"><input type="hidden" '
+                                                         'name="tok" value="x"><button name="ok" value="1">I am over 18</button></form>')),
+            "/idgate": (False, gate.format(extra=" Please verify your age with Yoti or upload a photo ID.")),
+        }
+        if self.path in ("/enter2", "/verify3"):
+            if self.path == "/verify3":
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.send_response(200)
+            self.send_header("Set-Cookie", ("g2=ok" if self.path == "/enter2" else "g3=ok") + "; Path=/")
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(b"<html><body>ok</body></html>")
+            return
+        if self.path in routes:
+            ok, gate_html = routes[self.path]
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write((article if ok else gate_html).encode())
             return
         if self.path.startswith("/magazine/interview"):
             body = ("<html><body><article><p>" + "Magazine interview with Nova Test. " * 30 +
@@ -539,6 +569,18 @@ def main():
             raise AssertionError("audience research without --talent should exit")
         except SystemExit as e:
             check("--talent" in str(e), "--audience-research requires --talent")
+        # ── Age gates: click-through answered for an adult user; real verification never bypassed
+        from persona_forge.research import Researcher as R3
+        ra = R3(cache=None, search_provider="none", confirm_adult=True)
+        for path, what in (("/gated", "cookie gate"), ("/gated2", "“I am 18 – Enter” link"), ("/gated3", "confirm form")):
+            got = ra.fetch(web_url + path, kind="user")
+            check(got is not None and "talks about her career" in got.text, f"age gate passed ({what})")
+        check(ra.fetch(web_url + "/idgate", kind="user") is None and
+              any("real age verification" in why for _, why in ra.skipped), "real ID/face/card verification not bypassed")
+        rn = R3(cache=None, search_provider="none", confirm_adult=False)
+        check(rn.fetch(web_url + "/gated", kind="user") is None and
+              any("I'm 18+" in why for _, why in rn.skipped), "without the 18+ box, gates are reported, not answered")
+
         # ── A page-reading model the provider doesn't know falls back to the main model
         fb = io.StringIO()
         with contextlib.redirect_stderr(fb):

@@ -605,6 +605,7 @@ Run `python -m persona_forge --help` for the full list. These are the main optio
 | `--talent` | Managed-creator mode. Skips Wikipedia and applies the creator-safety rules. Needs `--consent-note`. |
 | `--consent-note "..."` | Who authorised the card. Stored in the card. |
 | `--nsfw` | 18+ card. Adds adult-platform research and content themes. |
+| `--confirm-adult` / `--no-age-click` | Answer simple "Are you 18?" click-through pages (on by default with `--nsfw`), or never answer them. Real ID/face/card verification is never bypassed. |
 | `--boundaries F` | Hard limits, added word for word to the card's system prompt. |
 | `--audience-research` | A separate fan-perception report. Never used in the card. |
 
@@ -664,6 +665,8 @@ Run `python -m persona_forge --help` for the full list. These are the main optio
 | `Only N facts found` | Not enough material. Add `--deep`, more `--url` pages, or a `--file` brief. Check `review.md` to see what was read and skipped. |
 | Link hub reads 0 links | The site blocked the request. Add the hub's important links with `--url` or a `--urls-file`. |
 | `HTTP 404` / `403` / `503` on a link you added | Open the link in your browser. If it **doesn't** load, the link is wrong or the page was removed (old interviews often are). If it **does** load, the site blocks automated readers. The app already retries with normal browser settings, so save the page instead: **Ctrl+S / Cmd+S → "Webpage, HTML only"**, or copy the text into a `.txt`, and add it under **Text sources** (web UI) or with `--file`. |
+| "Are you 18?" page instead of content | With **18+ adult card** on (or the **I'm 18+** box ticked in the web UI, which is the default), the app answers simple click-through age pages for you: it sets the usual "verified" cookie, or clicks the site's own "Enter / I am 18" link or button. Use `--confirm-adult` on the command line for non-NSFW runs, or `--no-age-click` to turn it off. |
+| "the site uses real age verification" | The site requires an ID, face or card check (often required by law in some regions). The app never bypasses these. Open the page in your browser, complete the check yourself, save the page (Ctrl+S) and add it under **Text sources**. |
 | YouTube link gives little | Only a video's title and description can be read, not what's said. On YouTube click **… → Show transcript**, copy it into a `.txt` and add it under **Text sources**. |
 | A run still skips a page after you fixed it | Failed pages aren't cached, so just run again. |
 | Lots of `almost no readable text` | Social and fan sites hide content behind logins. Paste the text you need (bio, captions, FAQ) into a file and add it with `--file`. |

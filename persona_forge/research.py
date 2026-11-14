@@ -40,6 +40,52 @@ ALT_HEADERS = {  # second attempt: a different, equally ordinary browser
     "Accept-Encoding": "gzip, deflate",
     "Referer": "https://www.google.com/",
 }
+# ── Age gates ────────────────────────────────────────────────────────────────────────────────────────
+# Simple "Are you 18? Enter / Leave" pages are a self-declaration, which the app may answer for an adult user
+# (--confirm-adult; on by default with --nsfw). Real age verification – ID upload, face scan, card checks,
+# third-party verifiers – is a legal requirement in some regions and is never bypassed: the page is reported
+# so the user can save it from their own browser.
+AGE_GATE_RE = re.compile(
+    r"(are you (at least |over )?(18|21)|(18|21) (years|yrs)( of age)? or (older|over)|i am (18|21|over 18|an adult)|"
+    r"age (verification|confirmation|check|gate)|verify (that )?you are (18|21|of legal age|an adult)|adult content warning|"
+    r"you must be (18|21|of legal age)|(enter|continue) if you are (18|21|over)|this (website|site) contains (adult|"
+    r"sexually explicit|age-restricted)|confirm (your age|you are (18|21|an adult)))",
+    re.I,
+)
+STRICT_AGE_CHECK_RE = re.compile(
+    r"(government[- ]issued|photo id|upload (your|an) id|id document|driver'?s licen[cs]e|passport|selfie|face scan|"
+    r"facial (age )?estimation|credit card|verify with (yoti|ageid|veriff|go\.cam|verifymy)|yoti|agego|age ?id\b|"
+    r"go\.cam|verifymy|veriff|digital id|age assurance provider)",
+    re.I,
+)
+AGE_COOKIES = {  # names commonly used by click-through gates to remember the answer
+    "age_verified": "1", "ageVerified": "true", "age_verification": "1", "agegate": "1", "age_gate": "1",
+    "over18": "1", "over_18": "1", "is_adult": "1", "adult": "1", "adult_content": "1", "mature": "1",
+    "ageconfirmed": "1", "age_confirmed": "true", "av": "1", "ac": "1", "warning": "accepted", "disclaimer": "1",
+    "agreed": "1", "18plus": "1", "18_plus": "1", "legal_age": "1", "entered": "1", "enter": "1",
+}
+CONFIRM_WORDS = re.compile(r"\b(enter|yes|i am (18|21|over|an adult)|i'?m (18|21|over)|i agree|agree|continue|"
+                           r"i accept|accept|confirm|proceed|over 18|18\+|adult)\b", re.I)
+DENY_WORDS = re.compile(r"\b(no|leave|exit|under 18|i am not|i'?m not|take me back|decline|go back)\b", re.I)
+
+
+def age_gate_kind(html: str) -> str:
+    """'' (no gate), 'click' (simple self-declaration) or 'strict' (real verification)."""
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html[:300_000], "html.parser")
+    for t in soup(["script", "style", "noscript"]):
+        t.decompose()
+    text = " ".join(soup.get_text(" ", strip=True).split())
+    title = soup.title.get_text(" ", strip=True) if soup.title else ""
+    if not AGE_GATE_RE.search(title + " " + text[:4000]):
+        return ""
+    # A long article that merely mentions an age warning (e.g. in a hidden overlay) is readable as is.
+    if len(text) > 2500 and not AGE_GATE_RE.search(title):
+        return ""
+    return "strict" if STRICT_AGE_CHECK_RE.search(text[:6000]) else "click"
+
+
 TRACKING_PARAMS = re.compile(r"^(si|utm_[a-z]+|fbclid|gclid|igshid|mc_[a-z]+|ref_src|feature|pp)$", re.I)
 STATUS_ADVICE = {
     403: "the site blocks automated readers",
@@ -149,6 +195,7 @@ class Researcher:
         brave_key: str = "",
         tavily_key: str = "",
         timeout: int = 20,
+        confirm_adult: bool = False,
         max_page_chars: int = 60_000,
     ):
         self.cache = cache
@@ -158,6 +205,7 @@ class Researcher:
         self.brave_key = brave_key
         self.tavily_key = tavily_key
         self.timeout = timeout
+        self.confirm_adult = confirm_adult
         self.max_page_chars = max_page_chars
         self.http = requests.Session()
         self.http.headers["User-Agent"] = USER_AGENT
@@ -384,8 +432,88 @@ class Researcher:
     def _skip(self, url: str, reason: str) -> None:
         self.skipped.append((url, reason))
 
+    def _pass_age_gate(self, url: str, resp: requests.Response) -> requests.Response | None:
+        """Answer a simple click-through age gate the way a browser would, then load the page again.
+        1) remember-me cookies the gate commonly checks, 2) the gate's own "Enter / I am 18" link or form."""
+        from urllib.parse import urljoin
+
+        from bs4 import BeautifulSoup
+
+        host = urlparse(url).hostname or ""
+        base_domain = ".".join(host.split(".")[-2:])
+        headers = dict(BROWSER_HEADERS, Referer=url)
+
+        def still_gated(r: requests.Response) -> bool:
+            return r.status_code >= 400 or "html" not in r.headers.get("content-type", "") or bool(age_gate_kind(r.text))
+
+        for name, value in AGE_COOKIES.items():
+            self.http.cookies.set(name, value, domain=base_domain, path="/")
+        again = self.http.get(url, headers=headers, timeout=self.timeout)
+        if not still_gated(again):
+            return again
+
+        soup = BeautifulSoup(resp.text[:300_000], "html.parser")
+        # forms: submit the one whose button/labels say "Enter / I am 18…"
+        for form in soup.find_all("form"):
+            label = " ".join(x.get_text(" ", strip=True) + " " + (x.get("value") or "")
+                             for x in form.find_all(["button", "input", "label", "a"]))
+            if not CONFIRM_WORDS.search(label):
+                continue
+            data = {i.get("name"): i.get("value") or "1" for i in form.find_all("input")
+                    if i.get("name") and ((i.get("type") or "").lower() not in ("checkbox", "radio", "submit", "button")
+                                          or i.get("checked") is not None)}
+            for btn in form.find_all(["button", "input"]):
+                if btn.get("name") and CONFIRM_WORDS.search((btn.get_text(" ", strip=True) + " " + (btn.get("value") or ""))):
+                    data[btn.get("name")] = btn.get("value") or "1"
+                    break
+            for box in form.find_all("input", attrs={"type": re.compile("checkbox", re.I)}):
+                if box.get("name"):
+                    data[box.get("name")] = box.get("value") or "on"
+            target = urljoin(resp.url, form.get("action") or resp.url)
+            method = (form.get("method") or "get").lower()
+            try:
+                if method == "post":
+                    self.http.post(target, data=data, headers=headers, timeout=self.timeout)
+                else:
+                    self.http.get(target, params=data, headers=headers, timeout=self.timeout)
+            except requests.RequestException:
+                continue
+            again = self.http.get(url, headers=headers, timeout=self.timeout)
+            if not still_gated(again):
+                return again
+        # links/buttons: follow the "Enter / I am 18" one
+        for a in soup.find_all(["a", "button"]):
+            label = a.get_text(" ", strip=True) + " " + (a.get("title") or "") + " " + (a.get("aria-label") or "")
+            href = a.get("href") or a.get("data-href") or a.get("data-url") or ""
+            if not href or href.startswith(("#", "javascript:", "mailto:")) or DENY_WORDS.search(label):
+                continue
+            if CONFIRM_WORDS.search(label):
+                try:
+                    self.http.get(urljoin(resp.url, href), headers=headers, timeout=self.timeout)
+                    again = self.http.get(url, headers=headers, timeout=self.timeout)
+                except requests.RequestException:
+                    continue
+                if not still_gated(again):
+                    return again
+        return None
+
     def _get(self, url: str, retry: bool) -> requests.Response:
         resp = self.http.get(url, headers=BROWSER_HEADERS, timeout=self.timeout)
+        if resp.status_code < 400 and "html" in resp.headers.get("content-type", ""):
+            kind = age_gate_kind(resp.text)
+            if kind == "strict":
+                resp.age_gate = "strict"  # type: ignore[attr-defined]
+                return resp
+            if kind == "click":
+                if not self.confirm_adult:
+                    resp.age_gate = "off"  # type: ignore[attr-defined]
+                    return resp
+                passed = self._pass_age_gate(url, resp)
+                if passed is not None:
+                    log(f"  i {url}: answered the “Are you 18?” page")
+                    return passed
+                resp.age_gate = "click"  # type: ignore[attr-defined]
+                return resp
         if retry and resp.status_code in (403, 404, 406, 429, 503):
             time.sleep(1.5)
             alt = url
@@ -433,7 +561,18 @@ class Researcher:
         try:
             resp = self._get(url, retry=user_supplied)
             ctype = resp.headers.get("content-type", "")
-            if resp.status_code < 400 and "html" in ctype:
+            gate = getattr(resp, "age_gate", "")
+            if gate:
+                why = {
+                    "strict": "the site uses real age verification (ID, face or card check), which the app does not "
+                              "bypass – " + BLOCKED_TIP,
+                    "click": "an age-confirmation page the app couldn't answer automatically – " + BLOCKED_TIP,
+                    "off": "an “Are you 18?” page – tick “I'm 18+” (web UI) or use --confirm-adult to let the app "
+                           "answer it",
+                }[gate]
+                self._skip(url, why)
+                log(f"  ! {label}: {why}")
+            elif resp.status_code < 400 and "html" in ctype:
                 text, page_title = extract_main_text(resp.text, url)
                 meta = extract_meta(resp.text)
                 if (user_supplied or is_youtube) and meta and meta not in text:
