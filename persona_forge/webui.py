@@ -55,10 +55,13 @@ UPLOAD_KINDS = {  # kind → (subfolder, allowed extensions)
     "audio": ("audio", {".mp3", ".m4a", ".wav", ".ogg", ".oga", ".opus", ".webm", ".flac", ".aac", ".mp4", ".m4b",
                         ".mkv", ".mov", ".wma"}),
 }
+UPLOAD_KINDS["card"] = ("cards", {".png", ".json"})
 UPLOAD_LIMITS = {"audio": 1024 * 1024 * 1024}  # per kind; everything else uses MAX_UPLOAD
-SECRET_FIELDS = {"api_key", "image_api_key", "marinara_pass", "transcribe_api_key"}
+SECRET_FIELDS = {"api_key", "image_api_key", "marinara_pass", "transcribe_api_key", "reddit_client_secret"}
 MAX_UPLOAD = 25 * 1024 * 1024
 
+FEEDS_HEADER = ("# Public feeds for Persona Forge – one per line, e.g.  reddit: u/name   bluesky: name.bsky.social   "
+                "youtube: @handle   podcast: Stage Name\n")
 URLS_HEADER = "# Extra pages for Persona Forge – one URL per line. Lines starting with # are ignored.\n"
 
 
@@ -90,12 +93,14 @@ def create_talent(name: str) -> str:
     """Create (or complete) the folder structure for a creator. Safe to call repeatedly."""
     slug = slugify(name)[:80] or "character"
     d = talent_dir(slug)
-    for sub in ("references", "sprites/full-body", "avatar", "sources", "audio", "output", "runs"):
+    for sub in ("references", "sprites/full-body", "avatar", "sources", "audio", "cards", "output", "runs"):
         (d / sub).mkdir(parents=True, exist_ok=True)
     if not (d / "brief.md").exists():
         (d / "brief.md").write_text(_template("creator_brief_template.md").replace("<Stage name>", name), "utf-8")
     if not (d / "limits.txt").exists():
         (d / "limits.txt").write_text(_template("boundaries_template.txt"), "utf-8")
+    if not (d / "feeds.txt").exists():
+        (d / "feeds.txt").write_text(FEEDS_HEADER, "utf-8")
     if not (d / "urls.txt").exists():
         (d / "urls.txt").write_text(URLS_HEADER, "utf-8")
     if not (d / "settings.json").exists():
@@ -136,6 +141,16 @@ def output_files(d: Path) -> list[dict]:
     return [{"name": str(f.relative_to(od)), "path": str(f.relative_to(d)), "size": f.stat().st_size} for f in files]
 
 
+def refinable_cards(d: Path) -> list[str]:
+    """Cards in the creator folder that can be refined: the app's own outputs (newest first) and uploads."""
+    out = []
+    for p in sorted((d / "output").glob("*/*.png"), key=lambda p: p.stat().st_mtime, reverse=True):
+        if p.name != "avatar_generated.png":
+            out.append(str(p.relative_to(d)))
+    out += [str(p.relative_to(d)) for p in sorted((d / "cards").glob("*")) if p.suffix.lower() in (".png", ".json")]
+    return out
+
+
 def talent_info(slug: str) -> dict:
     d = talent_dir(slug)
     if not d.exists():
@@ -149,6 +164,9 @@ def talent_info(slug: str) -> dict:
         "brief": (d / "brief.md").read_text("utf-8") if (d / "brief.md").exists() else "",
         "limits": (d / "limits.txt").read_text("utf-8") if (d / "limits.txt").exists() else "",
         "urls": "\n".join(l for l in urls.splitlines() if l.strip() and not l.lstrip().startswith("#")),
+        "feeds": "\n".join(l for l in ((d / "feeds.txt").read_text("utf-8") if (d / "feeds.txt").exists() else "").splitlines()
+                           if l.strip() and not l.lstrip().startswith("#")),
+        "cards": refinable_cards(d),
         "files": {k: _files(d, sub, exts) for k, (sub, exts) in UPLOAD_KINDS.items()},
         "outputs": output_files(d),
         "has_dossier": bool(find_dossier(d)),
@@ -202,12 +220,15 @@ def _clean_limits(text: str) -> str:
 
 def save_talent_inputs(slug: str, form: dict) -> None:
     d = talent_dir(slug)
-    settings = {k: v for k, v in form.items() if k not in SECRET_FIELDS and k not in ("brief", "limits", "urls")}
+    settings = {k: v for k, v in form.items() if k not in SECRET_FIELDS and k not in ("brief", "limits", "urls", "feeds")}
     (d / "settings.json").write_text(json.dumps(settings, ensure_ascii=False, indent=2), "utf-8")
     if "brief" in form:
         (d / "brief.md").write_text(form.get("brief") or "", "utf-8")
     if "limits" in form:
         (d / "limits.txt").write_text(form.get("limits") or "", "utf-8")
+    if "feeds" in form:
+        (d / "feeds.txt").write_text(FEEDS_HEADER + "\n".join(l.strip() for l in (form.get("feeds") or "").splitlines()
+                                                              if l.strip()) + "\n", "utf-8")
     if "urls" in form:
         (d / "urls.txt").write_text(URLS_HEADER + "\n".join(_lines(form.get("urls", ""))) + "\n", "utf-8")
 
@@ -223,7 +244,7 @@ def validate(form: dict) -> list[str]:
     return errors
 
 
-def build_command(slug: str, form: dict, rebuild: bool = False) -> tuple[list[str], dict, list[str]]:
+def build_command(slug: str, form: dict, rebuild: bool = False, refine: str = "") -> tuple[list[str], dict, list[str]]:
     """Turn the form into CLI arguments. Empty boxes are simply left out, so the app's defaults apply."""
     d = talent_dir(slug)
     notes: list[str] = []
@@ -238,6 +259,13 @@ def build_command(slug: str, form: dict, rebuild: bool = False) -> tuple[list[st
             raise ValueError("No saved research yet – run a full build first.")
         a += ["--from-dossier", str(dossier)]
 
+    if refine:
+        card = (d / refine).resolve()
+        if d.resolve() not in card.parents or not card.is_file():
+            raise ValueError("Pick a card to refine (section 8).")
+        a += ["--refine", str(card)]
+        if _s(form, "refine_scope") in ("voice", "facts", "both"):
+            a += ["--refine-scope", _s(form, "refine_scope")]
     if mode == "talent":
         a += ["--talent", "--consent-note", _s(form, "consent_note")]
     elif mode == "fictional":
@@ -260,10 +288,19 @@ def build_command(slug: str, form: dict, rebuild: bool = False) -> tuple[list[st
             notes.append("Creator brief is still the empty template – it was left out of this run.")
         for f in _files(d, "sources", TEXT_EXTS):
             a += ["--file", str(d / "sources" / f)]
+        feeds = [l for l in ((d / "feeds.txt").read_text("utf-8") if (d / "feeds.txt").exists() else "").splitlines()
+                 if l.strip() and not l.lstrip().startswith("#")]
+        if feeds:
+            a += ["--feeds-file", str(d / "feeds.txt")]
+        if form.get("auto_feeds", True) in (False, "false", "0", 0):
+            a.append("--no-auto-feeds")
         for h in _lines(form.get("handles", "")):
             a += ["--handle", h.lstrip("@")]
-        if mode in ("talent", "fictional") and not (
-            _lines(form.get("seeds", "")) or urls or _meaningful_brief(brief) or _files(d, "sources", TEXT_EXTS)
+        if refine and not (feeds or _files(d, "audio", UPLOAD_KINDS["audio"][1]) or urls
+                           or _files(d, "sources", TEXT_EXTS) or _lines(form.get("seeds", ""))):
+            raise ValueError("Refining needs new material: add public feeds (section 2), audio, text sources or pages.")
+        if not refine and mode in ("talent", "fictional") and not (
+            _lines(form.get("seeds", "")) or urls or _meaningful_brief(brief) or _files(d, "sources", TEXT_EXTS) or feeds
         ):
             if _flag(form, "no_web"):
                 raise ValueError("Nothing to read: add a link hub, a page, a brief or a source file, "
@@ -315,6 +352,7 @@ def build_command(slug: str, form: dict, rebuild: bool = False) -> tuple[list[st
                               ("max_pages", "--max-pages", 0, 100), ("max_rounds", "--max-rounds", 0, 20),
                               ("pages_per_round", "--pages-per-round", 1, 50), ("site_pages", "--site-pages", 0, 30),
                               ("seed_depth", "--seed-depth", 1, 3), ("seed_max_links", "--seed-max-links", 1, 100),
+                              ("feed_items", "--feed-items", 10, 2000), ("podcast_episodes", "--podcast-episodes", 0, 20),
                               ("workers", "--workers", 1, 16), ("max_tokens", "--max-tokens", 512, 64_000),
                               ("sprite_expressions", "--sprite-expressions", 1, 16),
                               ("sprite_poses", "--sprite-poses", 1, 16), ("audience_pages", "--audience-pages", 1, 60),
@@ -347,7 +385,8 @@ def build_command(slug: str, form: dict, rebuild: bool = False) -> tuple[list[st
         a += ["--audio", str(d / "audio")]
     if not rebuild and _flag(form, "transcribe_pages"):
         a.append("--transcribe-pages")
-    for key, flag in (("whisper_model", "--whisper-model"), ("transcribe_base_url", "--transcribe-base-url"),
+    for key, flag in (("reddit_client_id", "--reddit-client-id"),
+                      ("whisper_model", "--whisper-model"), ("transcribe_base_url", "--transcribe-base-url"),
                       ("transcribe_model", "--transcribe-model"), ("audio_language", "--audio-language")):
         if _s(form, key):
             a += [flag, _s(form, key)]
@@ -363,7 +402,7 @@ def build_command(slug: str, form: dict, rebuild: bool = False) -> tuple[list[st
 
     # secrets travel by environment variable, never on the command line or in settings.json
     for key, var in (("api_key", "LLM_API_KEY"), ("image_api_key", "IMAGE_API_KEY"), ("marinara_pass", "MARINARA_PASS"),
-                     ("transcribe_api_key", "TRANSCRIBE_API_KEY")):
+                     ("transcribe_api_key", "TRANSCRIBE_API_KEY"), ("reddit_client_secret", "REDDIT_CLIENT_SECRET")):
         if _s(form, key):
             env[var] = _s(form, key)
     return a, env, notes
@@ -376,7 +415,8 @@ def save_env(form: dict) -> list[str]:
                "image_base_url": "IMAGE_BASE_URL", "image_api_key": "IMAGE_API_KEY", "image_model": "IMAGE_MODEL",
                "marinara_user": "MARINARA_USER", "marinara_pass": "MARINARA_PASS",
                "transcribe_base_url": "TRANSCRIBE_BASE_URL", "transcribe_api_key": "TRANSCRIBE_API_KEY",
-               "transcribe_model": "TRANSCRIBE_MODEL", "whisper_model": "WHISPER_MODEL", "whisper_device": "WHISPER_DEVICE"}
+               "transcribe_model": "TRANSCRIBE_MODEL", "whisper_model": "WHISPER_MODEL", "whisper_device": "WHISPER_DEVICE",
+               "reddit_client_id": "REDDIT_CLIENT_ID", "reddit_client_secret": "REDDIT_CLIENT_SECRET"}
     updates = {var: _s(form, key) for key, var in mapping.items() if _s(form, key)}
     if not updates:
         return []
@@ -569,7 +609,7 @@ class Handler(BaseHTTPRequestHandler):
                 save_talent_inputs(slug, form)
                 saved_env = save_env(form) if _flag(form, "save_env") else []
                 return self._json({"slug": slug, "saved_env": saved_env})
-            if u.path in ("/api/run", "/api/rebuild"):
+            if u.path in ("/api/run", "/api/rebuild", "/api/refine"):
                 form = json.loads(self._body() or b"{}")
                 errors = validate(form)
                 if errors:
@@ -579,7 +619,10 @@ class Handler(BaseHTTPRequestHandler):
                 saved_env = save_env(form) if _flag(form, "save_env") else []
                 if any(j.slug == slug and j.status == "running" for j in JOBS.values()):
                     return self._json({"errors": ["A run for this creator is already in progress."]}, 409)
-                argv, env, notes = build_command(slug, form, rebuild=u.path.endswith("rebuild"))
+                if u.path.endswith("refine") and not _s(form, "refine_card"):
+                    return self._json({"errors": ["Pick or upload the card to refine (section 8)."]}, 400)
+                argv, env, notes = build_command(slug, form, rebuild=u.path.endswith("rebuild"),
+                                                 refine=_s(form, "refine_card") if u.path.endswith("refine") else "")
                 if saved_env:
                     notes.append("Saved to .env: " + ", ".join(saved_env))
                 job = Job(slug, argv, env, notes)

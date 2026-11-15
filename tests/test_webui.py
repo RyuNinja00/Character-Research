@@ -159,6 +159,28 @@ def main():
     res, lines = wait(base, j["job"])
     check(res["status"] == "done" and "--from-dossier" in "\n".join(lines), "rebuild from saved research works")
 
+    # Refine the card just made, using the text source already in sources/
+    st, info = req(base, "/api/talent/Nova_Test")
+    check("output/Nova_Test/Nova_Test.png" in info["cards"], "built card offered for refining")
+    st, j = req(base, "/api/refine", "POST", dict(form, refine_card=""))
+    check(st == 400 and "card to refine" in j["errors"][0], "refine without a card → friendly error")
+    st, j = req(base, "/api/refine", "POST", dict(form, refine_card="../../etc/passwd"))
+    check(st == 400, "refine card path cannot escape the talent folder")
+    st, j = req(base, "/api/refine", "POST", dict(form, refine_card="output/Nova_Test/Nova_Test.png",
+                                                    refine_scope="facts", feeds="reddit: u/nobody\n"))
+    check(st == 200 and j.get("job"), "refine started")
+    res, lines = wait(base, j["job"])
+    rlog = "\n".join(lines)
+    check(res["status"] == "done" and "--refine" in rlog and "Refining the card" in rlog, "refine run finished")
+    check((out / "Nova_Test_v1.1.png").is_file() and (out / "refine_report.md").is_file(),
+          "refined card v1.1 and refine_report.md saved")
+    check((d / "feeds.txt").read_text().strip().endswith("reddit: u/nobody"), "feeds saved to feeds.txt")
+    st, info = req(base, "/api/talent/Nova_Test")
+    check(info["cards"][0].endswith("Nova_Test_v1.1.png"), "newest card listed first")
+    png = (out / "Nova_Test.png").read_bytes()
+    st, info = req(base, "/api/upload?talent=Nova_Test&kind=card&filename=made_elsewhere.png", "PUT", png)
+    check(st == 200 and "cards/made_elsewhere.png" in info["cards"], "uploaded card offered for refining")
+
     # Cross-site requests are refused
     st, _ = req(base, "/api/run", "POST", form, headers={"Origin": "https://evil.example"})
     check(st == 403, "requests from other websites refused")

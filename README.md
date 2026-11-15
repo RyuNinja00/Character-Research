@@ -210,6 +210,16 @@ Run `python -m persona_forge --help` for every option. The most useful ones:
 Page downloads and LLM replies are cached in `.persona_forge_cache/` for a week, so a re-run is cheap.
 Turn this off with `--no-cache`.
 
+## Public feeds and refining
+
+- **`--feed "reddit: u/name"`** (also `bluesky:`, `mastodon:`, `youtube:`, `tumblr:`, `rss:`, `substack:`,
+  `podcast:`): reads the posts platforms publish openly, with no logins. Feeds on the link hub are found
+  automatically. Their own posts give a **voice profile** (`voice_profile.md`): measured message length,
+  capitals, emoji, laughs, pet names and phrases, plus a short style guide the card's dialogue follows.
+- **`--refine card.png`**: improves an existing card (from this app or anywhere, V2/V3 PNG or JSON) with new
+  feeds, audio or sources. Boundaries, consent note, sprites and lorebook are kept; a new version
+  (`_v1.1`) and `refine_report.md` are saved. `--refine-scope voice|facts|both`.
+
 ## Output
 
 Files go in `output/<Name>/`:

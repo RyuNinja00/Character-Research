@@ -100,6 +100,24 @@ def build_parser() -> argparse.ArgumentParser:
                         "are added automatically. Used to recognise the creator's OWN adult-platform profiles.")
     g.add_argument("--descriptor", default="", help='Short "who is this" hint, e.g. "adult content creator and streamer"')
 
+    g = p.add_argument_group("public feeds (their own public posts → facts + voice profile)")
+    g.add_argument("--feed", action="append", default=[],
+                   help='Public feed, repeatable: "reddit: u/name", "bluesky: name.bsky.social", "mastodon: @user@server", '
+                        '"youtube: @handle", "tumblr: blog", "rss: https://…", "podcast: <search words>", or a profile link')
+    g.add_argument("--feeds-file", help="Text file with one feed per line")
+    g.add_argument("--no-auto-feeds", action="store_true", help="Don't pick up feeds from the link hub's links automatically")
+    g.add_argument("--feed-items", type=int, default=300, help="Most posts/comments read per feed (default 300)")
+    g.add_argument("--podcast-episodes", type=int, default=3, help="Most podcast episodes transcribed per run (default 3)")
+    g.add_argument("--reddit-client-id", default=env("REDDIT_CLIENT_ID", ""))
+    g.add_argument("--reddit-client-secret", default=env("REDDIT_CLIENT_SECRET", ""))
+
+    g = p.add_argument_group("refine an existing card")
+    g.add_argument("--refine", metavar="CARD",
+                   help="Refine an existing card (.png or .json, from this app or anywhere): add the new sources' facts and "
+                        "rewrite its dialogue in the person's measured voice. Writes a new version + refine_report.md")
+    g.add_argument("--refine-scope", choices=["both", "voice", "facts"], default="both",
+                   help="voice = only rewrite how they talk; facts = only add new facts/lore; both (default)")
+
     g = p.add_argument_group("audio (interviews, podcasts → transcripts)")
     g.add_argument("--audio", action="append", default=[],
                    help="Audio/video file or folder to transcribe and use as a source (mp3, m4a, wav, ogg, opus, mp4…)")
@@ -295,6 +313,54 @@ class _Audio:
                       text=transcript_source_text(path.name, text, person, origin), kind="user")
 
 
+def collect_feeds(r: Researcher, args, name: str, audio) -> list[Source]:
+    from .audio import download_audio
+    from .feeds import FeedCollector, feed_source, own_messages, parse_feed_line, specs_from_links
+
+    lines = list(args.feed)
+    if args.feeds_file and Path(args.feeds_file).exists():
+        lines += Path(args.feeds_file).read_text("utf-8").splitlines()
+    specs = []
+    for line in lines:
+        spec = parse_feed_line(line)
+        if spec is None and line.strip() and not line.strip().startswith("#"):
+            log(f"  ! feed “{line.strip()}” not recognised (X/Instagram/TikTok/OnlyFans have no public feed – use their "
+                "data export instead)")
+        elif spec and spec not in specs:
+            specs.append(spec)
+    if not args.no_auto_feeds:
+        auto = [sp for sp in specs_from_links(r.hub_links) if sp not in specs]
+        if auto:
+            log("→ Feeds found on the link hub: " + ", ".join(sp.label() for sp in auto))
+            specs += auto
+    args._voice_messages = getattr(args, "_voice_messages", [])
+    if not specs:
+        return []
+    if args.no_web:
+        log("  ! public feeds skipped: Offline / --no-web is on")
+        return []
+    fc = FeedCollector(max_items=args.feed_items, confirm_adult=(args.nsfw or args.confirm_adult) and not args.no_age_click,
+                       reddit_id=args.reddit_client_id, reddit_secret=args.reddit_client_secret, person=name)
+    out: list[Source] = []
+    results = []
+    episodes_left = max(0, args.podcast_episodes)
+    log(f"→ Collecting {len(specs)} public feed(s)…")
+    for spec in specs:
+        res = fc.collect(spec)
+        results.append(res)
+        got = f"{len(res.items)} posts" + (f", {len(res.audio)} episodes" if res.audio else "")
+        log(f"  {'✓' if res.items or res.audio else '!'} {spec.label()}: {got}" + (f" – {res.note}" if res.note else ""))
+        if src := feed_source(res, name):
+            out.append(src)
+        for ep in res.audio[:episodes_left]:
+            f = download_audio(ep["url"], Path(args.cache_dir) / "audio", r.http)
+            if f and (src := audio.source(f, name, origin=f"{ep['title']} ({ep['date']})")):
+                out.append(src)
+                episodes_left -= 1
+    args._voice_messages += own_messages(results)
+    return out
+
+
 def gather_sources(r: Researcher, args) -> tuple[list[Source], str, str]:
     sources: list[Source] = []
     name = args.name
@@ -344,7 +410,7 @@ def gather_sources(r: Researcher, args) -> tuple[list[Source], str, str]:
         if q := r.wikiquote(wiki.title):
             log("→ Wikiquote page found")
             sources.append(q)
-    elif not (args.url or args.seed or args.file or args.audio or args.audio_url
+    elif not (args.url or args.seed or args.file or args.audio or args.audio_url or args.feed or args.feeds_file
               or (args.search_web and not args.no_web)):
         raise SystemExit("--talent / --no-wikipedia needs at least one --seed, --url or --file "
                          "(or --search-web / --deep to search the name).")
@@ -367,10 +433,13 @@ def gather_sources(r: Researcher, args) -> tuple[list[Source], str, str]:
             p.meta.pop("html", None)
     # Creator's own adult-platform profiles: only their own pages are read, so this runs whenever web access is
     # allowed – no --search-web needed.
-    if args.talent and args.nsfw and not args.no_web:
+    if args.talent and args.nsfw and not args.no_web and not getattr(args, "_refine", False):
         plat = r.adult_platform_sweep(name, args.handles, {s.url.split("#")[0].rstrip("/") for s in sources},
                                       max_pages=args.max_pages)
         sources.extend(plat)
+    # Public feeds: the person's own posts (typed in, plus feeds found among the link hub's links)
+    sources.extend(collect_feeds(r, args, name, audio))
+
     # the same page can arrive via a hub, --url and the sweep; keep one copy
     uniq: dict[str, Source] = {}
     for s in sources:
@@ -536,6 +605,14 @@ def card_sources(urls: list[str], talent: bool) -> list[str]:
 
 def save_research(out: Path, slug: str, opts, dossier: dict, facts, source_urls: list[str],
                   transcripts: list[tuple[str, str]] | None = None) -> None:
+    if isinstance(dossier.get("voice_profile"), dict):
+        vp = dossier["voice_profile"]
+        (out / "voice_profile.json").write_text(json.dumps(vp, ensure_ascii=False, indent=2), "utf-8")
+        lines = [f"# How {opts.name} writes", "", vp.get("summary", ""), "", "## Rules", ""]
+        lines += [f"- {r}" for r in vp.get("rules", [])]
+        lines += ["", "## Measured", "", "```", json.dumps(vp.get("measured", {}), ensure_ascii=False, indent=1), "```",
+                  "", "## Real examples", ""] + [f"> {m}" for m in vp.get("real_samples", [])]
+        (out / "voice_profile.md").write_text("\n".join(lines) + "\n", "utf-8")
     if transcripts:
         tdir = out / "transcripts"
         tdir.mkdir(exist_ok=True)
@@ -558,9 +635,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     set_verbose(args.verbose)
-    if not args.name and not args.from_dossier:
+    if not args.name and not args.from_dossier and not args.refine:
         parser.print_help()
         return 2
+    if args.refine:
+        from .refine import run_refine
+
+        return run_refine(args, parser)
     saved_boundaries = apply_saved_settings(args, parser) if args.from_dossier else ""
     if not args.api_key and "localhost" not in args.base_url and "127.0.0.1" not in args.base_url:
         log("! No API key set (LLM_API_KEY / --api-key). Local servers usually don't need one.")
@@ -662,6 +743,11 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 dossier, facts, aliases, used, sources = gf.dossier, gf.facts, gf.aliases, gf.used, gf.sources
                 gap_report = (gf.coverage, gf.rounds)
+        if getattr(args, "_voice_messages", None):
+            from .voice import build_voice_profile, merge_voice_into_dossier
+
+            if vp := build_voice_profile(main_llm, opts.name, args._voice_messages, nsfw=opts.nsfw):
+                merge_voice_into_dossier(dossier, vp)
         if gap_report is None:
             gap_report = (coverage(dossier, opts), [])
         if summary := r.search_summary():

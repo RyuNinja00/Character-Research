@@ -222,6 +222,17 @@ class FakeLLM(BaseHTTPRequestHandler):
 
 def nova_reply(system: str, user: str) -> dict:
     """Fake LLM for the --deep test: profile fills in as gap pages arrive."""
+    if "dialogue coach" in system:
+        assert "REAL MESSAGES" in user and "omg yes" in user
+        return {"summary": "Lowercase, emoji-heavy, sweet and teasing.", "rules": ["mostly lowercase", "uses 😭 a lot",
+                "calls people babe"], "vocabulary": ["lowkey", "fr", "omg"], "example_lines": ["omg hiii 😭"]}
+    if "You refine an existing character card" in system:
+        assert "CURRENT CARD" in user
+        out = {"first_mes": "omg hiii {{user}} 😭 u came!!", "system_prompt": "Stay in character.",
+               "changes": ["Rewrote the greeting in her lowercase, emoji-heavy style"]}
+        if "VOICE PROFILE" not in user:
+            out.pop("first_mes")
+        return out
     if "analyse public audience discussion" in system:
         return {"relevant": True, "insights": [
             {"type": "request", "insight": "AUDIENCE_MARKER fans keep requesting more cosplay sets", "mentions": 3}]}
@@ -389,6 +400,68 @@ class FakeWeb(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/html")
             self.end_headers()
             self.wfile.write(js_routes[self.path].encode())
+            return
+        from urllib.parse import parse_qs as _pq, urlparse as _up
+        _p, _q = _up(self.path).path, _pq(_up(self.path).query)
+        nova_lines = ["omg yes 😭 thank u babe", "lmao no way", "ok but hear me out… horror games at 2am", "ily guys 💕",
+                      "stoppp ur too sweet 😭", "i literally can't lmao", "new stream tonight!! u coming?", "lowkey shy irl tbh",
+                      "haha ok ok fine", "babe ur so funny", "sooo tired but happy", "u guys make my day 💕",
+                      "no thoughts just vibes", "not me crying at a game ending 😭", "hiii", "omg stop it lol",
+                      "who's up rn", "i love u all fr", "that's so real lmao", "brb snacks"]
+        feeds_json = None
+        if _p.startswith("/reddit/user/novatest/comments"):
+            kids = [{"data": {"author": "novatest", "body": l, "subreddit": "NovaFans", "created_utc": 1730000000 + i}}
+                    for i, l in enumerate(nova_lines)]
+            kids += [{"data": {"author": "someone_else", "body": "not her", "subreddit": "x", "created_utc": 1}},
+                     {"data": {"author": "novatest", "body": "> quoted fan text\nmy actual reply 😭", "subreddit": "x", "created_utc": 2}}]
+            feeds_json = {"data": {"children": kids, "after": None}}
+        elif _p.startswith("/reddit/user/novatest/submitted"):
+            feeds_json = {"data": {"children": [{"data": {"author": "novatest", "title": "AMA: streamer here",
+                                                           "selftext": "ask me anything lol", "subreddit": "AMA", "created_utc": 3}}],
+                                   "after": None}}
+        elif _p.startswith("/reddit/user/ghost"):
+            self.send_response(404)
+            self.end_headers()
+            return
+        elif _p == "/bsky/xrpc/app.bsky.feed.getAuthorFeed":
+            me = {"handle": "nova.bsky.social"}
+            feeds_json = {"feed": [{"post": {"author": me, "record": {"text": l, "createdAt": "2026-10-01T00:00:00Z"}}}
+                                   for l in nova_lines[:8]]
+                          + [{"reason": {"$type": "repost"}, "post": {"author": me, "record": {"text": "REPOSTED"}}},
+                             {"post": {"author": {"handle": "other.bsky.social"}, "record": {"text": "OTHER"}}}]}
+        elif _p == "/api/v1/accounts/lookup":
+            feeds_json = {"id": "7"}
+        elif _p == "/api/v1/accounts/7/statuses":
+            feeds_json = [] if "max_id" in _q else [{"id": str(i), "content": f"<p>{l}</p>", "created_at": "2026-09-01"}
+                                                    for i, l in enumerate(nova_lines[:5])]
+        elif _p == "/yt/@novatest":
+            body = '<html><script>var x = {"channelId":"UCabcdefghijklmnopqrstuv"}</script></html>'
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body.encode())
+            return
+        elif _p == "/yt/feeds/videos.xml":
+            body = ('<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom" xmlns:media="http://search.yahoo.com/mrss/">'
+                    '<entry><title>Horror night!!</title><published>2026-10-02</published><media:group>'
+                    '<media:description>hiii guys welcome back 😭 tonight we play scary stuff</media:description></media:group></entry>'
+                    '</feed>')
+            self.send_response(200)
+            self.send_header("Content-Type", "application/atom+xml")
+            self.end_headers()
+            self.wfile.write(body.encode())
+            return
+        elif _p == "/itunes/search":
+            feeds_json = {"results": [
+                {"trackName": "Ep 9 with Nova Test", "collectionName": "Big Pod", "description": "Nova Test talks streaming",
+                 "episodeUrl": f"{b}/ep.mp3", "releaseDate": "2026-08-01T00:00:00Z"},
+                {"trackName": "Unrelated", "collectionName": "Other", "description": "nothing", "episodeUrl": f"{b}/nope.mp3"}]}
+        if feeds_json is not None:
+            data = json.dumps(feeds_json).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(data)
             return
         if self.path == "/podcast-page":
             body = (f'<html><head><meta property="og:audio" content="{b}/ep.mp3"></head><body><article><p>'
@@ -873,6 +946,82 @@ def main():
         _xf(cl, src_of("CUTLENGTH"), _Opt(name="Ada Lovelace"))
         _xf(cl, src_of("CUTLENGTH"), _Opt(name="Ada Lovelace"))
         check(FakeLLM.cut_calls == 2, "cut-off replies are never cached (a re-run asks again)")
+
+        # ── Public feeds → voice profile → card; refine an existing card
+        from persona_forge import feeds as fmod
+        from persona_forge.voice import voice_stats
+        fmod.FeedCollector.REDDIT = web_url + "/reddit"
+        fmod.FeedCollector.BLUESKY = web_url + "/bsky"
+        fmod.FeedCollector.YOUTUBE = web_url + "/yt"
+        fmod.FeedCollector.ITUNES = web_url + "/itunes"
+        fmod.FeedCollector.MASTODON_SCHEME = "http://"
+        host = web_url.split("://", 1)[1]
+        fc = fmod.FeedCollector(person="Nova Test")
+        rr_ = fc.collect(fmod.parse_feed_line("reddit: u/novatest"))
+        texts = [i["text"] for i in rr_.items]
+        check(len(rr_.items) == 22 and "not her" not in texts and "my actual reply 😭" in texts and
+              not any("quoted fan text" in x for x in texts), "Reddit: own comments + posts, others and quoted text dropped")
+        bs = fc.collect(fmod.parse_feed_line("https://bsky.app/profile/nova.bsky.social"))
+        check(len(bs.items) == 8 and not any(i["text"] in ("REPOSTED", "OTHER") for i in bs.items),
+              "Bluesky: own posts only (no reposts, no other people)")
+        ms = fc.collect(fmod.FeedSpec("mastodon", f"@nova@{host}"))
+        check(len(ms.items) == 5 and ms.items[0]["text"] == "omg yes 😭 thank u babe", "Mastodon: statuses, HTML stripped")
+        yt = fc.collect(fmod.parse_feed_line("youtube: @novatest"))
+        check(yt.items and "tonight we play scary stuff" in yt.items[0]["text"], "YouTube: channel resolved, video descriptions read")
+        pod = fc.collect(fmod.parse_feed_line("podcast: Nova Test"))
+        check([a["url"] for a in pod.audio] == [web_url + "/ep.mp3"], "Podcasts: only episodes that mention them")
+        gh = fc.collect(fmod.parse_feed_line("reddit: u/ghost"))
+        check(not gh.items and "not found" in gh.note, "missing account → clear note, run continues")
+        st = voice_stats(fmod.own_messages([rr_, bs]))
+        check(st["starts_lowercase_pct"] > 80 and "😭" in st["top_emojis"] and "babe" in st["pet_names"] and "lmao" in st["laughs"],
+              "voice measured: lowercase, emoji, pet names, laughs")
+        check(fmod.specs_from_links(["https://www.reddit.com/user/novatest", "https://onlyfans.com/x",
+                                     "https://nova.tumblr.com/"]) == [fmod.FeedSpec("reddit", "novatest"), fmod.FeedSpec("tumblr", "nova")],
+              "feeds spotted among link-hub links (OnlyFans ignored)")
+
+        lim2 = Path(tmp) / "limits2.txt"
+        lim2.write_text("- Never share my location.")
+        flog = io.StringIO()
+        with contextlib.redirect_stderr(flog):
+            rc = cli.main(["Nova Test", "--talent", "--consent-note", "Approved by Nova", "--search-provider", "none",
+                           "--feed", "reddit: u/novatest", "--feed", "bluesky: nova.bsky.social", "--feed", "instagram: nova",
+                           "--boundaries", str(lim2), "--base-url", llm_url, "--model", "f", "--out", tmp, "--no-cache",
+                           "--site-pages", "0"])
+        fout = Path(tmp) / "Nova_Test"
+        dos = json.loads((fout / "dossier.json").read_text())
+        check(rc == 0 and dos.get("voice_profile", {}).get("rules") and (fout / "voice_profile.md").exists(),
+              "feeds → voice profile saved in dossier and voice_profile.md")
+        check("instagram: nova” not recognised" in flog.getvalue(), "unsupported platforms explained")
+        base_png = fout / "Nova_Test.png"
+        base_card = marinara.read_card_from_png(base_png.read_bytes())["data"]
+
+        rlog = io.StringIO()
+        with contextlib.redirect_stderr(rlog):
+            rc = cli.main(["--refine", str(base_png), "--feed", "reddit: u/novatest", "--base-url", llm_url, "--model", "f",
+                           "--out", tmp, "--no-cache", "--search-provider", "none"])
+        v = marinara.read_card_from_png((fout / "Nova_Test_v1.1.png").read_bytes())["data"]
+        check(rc == 0 and v["first_mes"].startswith("omg hiii") and v["character_version"] == "1.1", "refined card v1.1 in their voice")
+        check("Never share my location." in v["system_prompt"] and v["creator_notes"].startswith("Authorization:"),
+              "hard boundaries and consent note kept even when the AI dropped them")
+        check(len(v["character_book"]["entries"]) >= len(base_card["character_book"]["entries"]),
+              "existing lorebook entries kept")
+        rep_md = (fout / "refine_report.md").read_text()
+        check("Rewrote the greeting" in rep_md and "**Before**" in rep_md and "Lowercase, emoji-heavy" in rep_md,
+              "refine_report.md lists changes, voice and before/after")
+        # a card made elsewhere (plain JSON, no lorebook)
+        foreign = Path(tmp) / "foreign.json"
+        foreign.write_text(json.dumps({"spec": "chara_card_v2", "data": {"name": "Nova Test", "description": "x",
+                                                                          "first_mes": "Hello.", "character_version": "2"}}))
+        rc = cli.main(["--refine", str(foreign), "--refine-scope", "facts", "--feed", "reddit: u/novatest",
+                       "--base-url", llm_url, "--model", "f", "--out", tmp, "--no-cache", "--search-provider", "none"])
+        fv = json.loads((fout / "Nova_Test_v2.1.card.json").read_text())["data"]
+        check(rc == 0 and fv["first_mes"] == "Hello." and fv["character_book"]["entries"],
+              "card from elsewhere refined (facts only: dialogue untouched, lorebook added)")
+        try:
+            cli.main(["--refine", str(base_png), "--base-url", llm_url, "--model", "f", "--out", tmp])
+            check(False, "refine without material should stop")
+        except SystemExit as e:
+            check("needs new material" in str(e), "refine without new material → clear message")
 
         # ── A page-reading model the provider doesn't know falls back to the main model
         fb = io.StringIO()

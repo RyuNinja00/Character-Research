@@ -18,6 +18,8 @@ web UI (Part 3b).** Parts 4 onward cover the command line and the details behind
 9. Import into Marinara and set it up
 10. Sprites and images
 10b. Audio: interviews and podcasts
+10c. Public feeds: how they really talk
+10d. Refine a card you already have
 11. Every option, grouped
 12. Troubleshooting
 13. Time, cost and tips
@@ -665,6 +667,82 @@ If the GPU still fails, the console shows the error and the run continues on the
 
 ---
 
+## 10c. Public feeds: how they really talk
+
+Interviews tell the app **what** someone is like. Their own posts show **how they talk**: lowercase or not,
+which emoji, how they laugh, what they call people, how long their messages are. The app can read the feeds
+platforms openly publish, with **no logins and no account access**, so anyone on your team can run it.
+
+### Supported feeds
+
+| Platform | Write it as | What's read |
+| --- | --- | --- |
+| Reddit | `reddit: u/name` or a profile link | Their own comments and posts (quoted text from others is removed) |
+| Bluesky | `bluesky: name.bsky.social` | Their own posts (no reposts) |
+| Mastodon / fediverse | `mastodon: @user@server` | Their own posts |
+| YouTube | `youtube: @handle` | Recent video titles and descriptions (spoken words: use the transcript tip in 10b) |
+| Tumblr | `tumblr: blogname` | Their posts; audio posts are transcribed |
+| Blogs, Substack, any RSS | `rss: https://…/feed` or `substack: name` | Posts; podcast feeds' episodes are transcribed |
+| Podcast guest spots | `podcast: Stage Name` | Episodes (found through Apple Podcasts search) whose title or description names them, downloaded and transcribed |
+
+**Not possible:** X/Twitter, Instagram, TikTok, OnlyFans, Fansly and Discord have no public feed. For those, ask
+the creator for their **data export** (each platform has a "download your data" option) and add the files as
+**Text sources**.
+
+### How to add them
+
+- **Web UI:** section 2, **Public feeds**, one per line. **Find feeds on the link hub automatically** (on by
+  default) also adds Reddit, Bluesky, YouTube, Tumblr and blog links found on their Linktree. Saved in
+  `talent/<name>/feeds.txt`.
+- **Command line:** `--feed "reddit: u/ivywren"` (repeatable), or `--feeds-file talent/Ivy_Wren/feeds.txt`.
+  `--no-auto-feeds` turns off the link-hub detection; `--feed-items 300` and `--podcast-episodes 3` set limits.
+
+### The voice profile
+
+With about **15 or more** of their own posts, the app measures their writing (message length, capitals, emoji,
+laughs, pet names, swearing, repeated phrases) and asks the AI for a short style guide with real example lines.
+It's saved as `voice_profile.md` and in `dossier.json`, and the card's greetings, example chats and dialogue
+rules follow it. Their posts also count as their own words for facts, just like their own pages.
+
+### Reddit keys (only if Reddit refuses)
+
+Reddit sometimes refuses anonymous reading ("Reddit refused the request (HTTP 403)"). Fix it with a free app:
+
+1. Signed in to any Reddit account, open **reddit.com/prefs/apps** → **create another app**.
+2. Pick **script**, give it any name, and use `http://localhost` as the redirect address.
+3. Copy the ID (under the app name) and the **secret** into `.env` as `REDDIT_CLIENT_ID` and
+   `REDDIT_CLIENT_SECRET`, or into section 7 of the web UI. The app only reads public posts with it.
+
+---
+
+## 10d. Refine a card you already have
+
+Made a card earlier (with this app or anywhere else) and want it to feel more real? **Refine** adds new
+material without starting over.
+
+1. Add the new material: **Public feeds**, **Audio & video**, **Text sources** or **Extra pages**.
+2. **Web UI:** section 8, pick the card (cards this app made are listed newest first) or upload one
+   (PNG or JSON, Character Card V2/V3). Choose **What to refine**, then press **Refine card**.
+   **Command line:**
+   ```bash
+   python -m persona_forge --refine talent/Ivy_Wren/output/Ivy_Wren/Ivy_Wren.png \
+       --feed "reddit: u/ivywren" --feed "bluesky: ivywren.bsky.social"
+   ```
+3. What to refine (`--refine-scope`):
+   - **Both** (default): new facts plus their real voice.
+   - **Voice only:** rewrites greetings, example chats and speech style. Needs a feed with ~15+ posts.
+   - **Facts only:** adds new details and lorebook entries; dialogue is left alone.
+
+Only the new material is read (no new web searching), so it's quick. The app then:
+
+- **keeps** the hard boundaries, the consent note, sprites, the card image and every existing lorebook entry;
+- saves a **new version** next to the old one (`Ivy_Wren_v1.1.png` and `.card.json`), so nothing is overwritten;
+- writes `refine_report.md`: what changed and why, the voice profile, and before/after of the greeting.
+
+Read the report, test the new version in Marinara, and keep whichever you prefer. `--push` sends it to Marinara.
+
+---
+
 ## 11. Every option, grouped
 
 Run `python -m persona_forge --help` for the full list. These are the main options.
@@ -719,6 +797,19 @@ Run `python -m persona_forge --help` for the full list. These are the main optio
 **Images**: `--avatar`, `--avatar-from-reference`, `--generate-avatar`, `--avatar-style`, `--references`,
 `--sprites`, `--sprite-expressions`, `--sprite-poses`, `--no-image-prompt`, `--image-base-url`,
 `--image-api-key`, `--image-model`.
+
+**Public feeds and refining**
+
+| Option | Meaning |
+| --- | --- |
+| `--feed "platform: name"` | A public feed to read (Reddit, Bluesky, Mastodon, YouTube, Tumblr, RSS, podcast). Repeatable. See 10c. |
+| `--feeds-file F` | One feed per line. |
+| `--no-auto-feeds` | Don't add feeds found on the link hub. |
+| `--feed-items N` | The most posts read per feed. Default 300. |
+| `--podcast-episodes N` | The most podcast episodes transcribed. Default 3. |
+| `--reddit-client-id` / `--reddit-client-secret` | Reddit app keys, only if Reddit refuses. |
+| `--refine CARD` | Improve an existing card (PNG or JSON) with new material. See 10d. |
+| `--refine-scope both\|voice\|facts` | What refining may change. Default both. |
 
 **AI model**
 
@@ -775,6 +866,11 @@ Run `python -m persona_forge --help` for the full list. These are the main optio
 | Lots of `almost no readable text` | Social and fan sites hide content behind logins. Paste the text you need (bio, captions, FAQ) into a file and add it with `--file`. |
 | `search failed (ddg): No results found` (older versions) / few web pages | Fixed: adult runs now search with **safe search off** (DuckDuckGo's default, "moderate", hid adult sites), an empty search is retried once in a simpler form, and empties are no longer reported as failures. The run prints one summary line, e.g. `Web search (ddg, safe search off): 18 searches, 11 with results`. If free search still finds little, add `TAVILY_API_KEY` or `BRAVE_API_KEY` to `.env` (much better results), or add pages yourself under **Extra pages**. |
 | `search is being rate-limited` | DuckDuckGo is throttling the free search. The app waits and slows down automatically. Fewer `--max-rounds`, or a Tavily/Brave key, avoids it. |
+| "Reddit refused the request (HTTP 403/429)" | Add free Reddit app keys: see **10c → Reddit keys**. |
+| A feed says "not found" | Check the spelling, and that the account is public. The run continues without it. |
+| "public feeds skipped: Offline" | Feeds are read from the internet, so untick **Offline** (`--no-web`). |
+| "only N public messages – not enough for a voice profile" | The feeds had fewer than ~15 posts. Add another feed, or their data export as a Text source. |
+| "Refining needs new material" | Add feeds, audio, text sources or pages first, then press **Refine card**. |
 | Wrong person's facts | Use a more specific `--descriptor`, add `--handle`, and delete the wrong facts from `dossier.json`, then rebuild. |
 | `Push failed … 401` | Set `MARINARA_USER` and `MARINARA_PASS` in `.env`. |
 | `Push failed … 403` | Marinara rejected the request. Run the app on the same computer as Marinara, or import the PNG by hand. |

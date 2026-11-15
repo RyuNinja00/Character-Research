@@ -63,7 +63,7 @@ class Options:
 
 # Source kinds that count as the creator's own channels (link hub, pages it links to, their own sites,
 # pages you chose with --url, creator briefs). Intimacy facts are accepted only from these.
-OWN_CHANNEL_KINDS = {"hub", "user", "brief", "platform"}
+OWN_CHANNEL_KINDS = {"hub", "user", "brief", "platform", "feed"}
 ADULT_CATEGORIES = {"intimacy", "content_theme"}
 
 # Themes that are never put in a card, even when they appear in posted content: anything minor-coded,
@@ -500,6 +500,10 @@ Fields to produce (all strings unless noted):
 {_content_rules(opts)}
 Never fabricate events, relationships or quotes that contradict the dossier. Where the dossier is silent, keep it vague
 rather than inventing specifics.
+VOICE: if the dossier has "voice_profile", it was measured from the person's real public messages and is the authority
+on how they talk. first_mes, alternate_greetings, mes_example and the "Speech:" section must follow its rules (message
+length, casing, punctuation, emoji, laughs, pet names, vocabulary) and should sound like its real_samples and
+example_lines. Put its 3-5 most distinctive rules into depth_prompt and post_history_instructions.
 
 Output JSON with exactly these keys: summary, description, personality, appearance, image_appearance, backstory, scenario, first_mes,
 alternate_greetings, mes_example, system_prompt, post_history_instructions, depth_prompt, creator_notes, tags, name_color."""

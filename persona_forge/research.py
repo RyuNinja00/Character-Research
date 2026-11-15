@@ -244,6 +244,7 @@ class Researcher:
         self.http.headers["User-Agent"] = USER_AGENT
         self.skipped: list[tuple[str, str]] = []  # (url, reason) – reported in review.md
         self.discovered_handles: list[str] = []      # usernames seen in the creator's own platform links
+        self.hub_links: list[str] = []               # every link on the creator's link hubs (feeds are found here)
         self.handles: list[str] = []                 # the creator's usernames (set by the CLI)
 
     # ───────────────────────────────────────────── Wikipedia / Wikiquote
@@ -870,6 +871,7 @@ class Researcher:
             return []
         html = hub.meta.pop("html", "")
         links = extract_links(html, url)
+        self.hub_links += [u for u, _ in links if u not in self.hub_links]
         hub.text = hub.text + "\n\n## Links on this page\n" + "\n".join(f"- {t or u}: {u}" for u, t in links)
         out = [hub]
         targets = []

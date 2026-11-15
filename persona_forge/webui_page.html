@@ -199,6 +199,14 @@
           <div class="hint">One per line: interviews, podcasts, their website, profile or store pages. Saved to <code>urls.txt</code>. A page that won't load (403/404)? Save it from your browser and add it under <b>Text sources</b>.</div>
         </div>
       </div>
+      <div class="field">
+        <label for="feeds">Public feeds: their own posts, for how they really talk</label>
+        <textarea id="feeds" name="feeds" placeholder="e.g. reddit: u/ivywren&#10;bluesky: ivywren.bsky.social&#10;youtube: @ivywren&#10;podcast: Ivy Wren"></textarea>
+        <div class="hint">One per line. <b>reddit: u/name</b> · <b>bluesky: name.bsky.social</b> · <b>mastodon: @user@server</b> · <b>youtube: @handle</b> · <b>tumblr: blog</b> · <b>rss: https://…</b> (Substack, blogs) · <b>podcast: Stage Name</b> (episodes they appeared on, transcribed). Profile links work too. Their posts give a <b>voice profile</b>: how they write, measured from real messages. X, Instagram, TikTok and OnlyFans have no public feed; use their data export instead.</div>
+      </div>
+      <div class="check"><input type="checkbox" id="auto_feeds" name="auto_feeds" checked><div>
+        <label for="auto_feeds">Find feeds on the link hub automatically</label>
+        <div class="hint">Reddit, Bluesky, YouTube, Tumblr and blog links on their Linktree are added as feeds.</div></div></div>
       <div class="field" data-modes="talent fictional">
         <label for="handles">Platform usernames</label>
         <input type="text" id="handles" name="handles" placeholder="e.g. ivywrenxo, @ivy_w">
@@ -538,6 +546,36 @@
     </div>
   </section>
 
+  <!-- ─────────────────────────────── REFINE -->
+  <section class="card">
+    <h2>8 · Refine an existing card</h2>
+    <div class="body">
+      <div class="hint" style="margin:6px 0 4px">Already have a card? Add <b>public feeds</b>, <b>audio</b>, <b>text sources</b> or <b>pages</b> above, pick the card here and press <b>Refine card</b>. The app reads only that material, measures how they really talk, and rewrites the card's dialogue and details. Everything else (boundaries, consent note, sprites, lorebook) is kept, and you get a new version plus <code>refine_report.md</code>.</div>
+      <div class="grid2">
+        <div class="field">
+          <label for="refine_card">Card to refine</label>
+          <select id="refine_card" name="refine_card"><option value="">Build a card first, or upload one →</option></select>
+          <div class="hint">Cards this app made for this creator (newest first), plus any you upload.</div>
+        </div>
+        <div class="field">
+          <label>Upload a card</label>
+          <div class="drop" data-kind="card"><input type="file" accept=".png,.json"></div>
+          <div class="chips" id="files-card"></div>
+          <div class="hint">A card made anywhere (Character Card V2/V3, PNG or JSON). Saved in <code>cards/</code>.</div>
+        </div>
+        <div class="field">
+          <label for="refine_scope">What to refine</label>
+          <select id="refine_scope" name="refine_scope">
+            <option value="">Both: new facts + their real voice</option>
+            <option value="voice">Voice only: how they talk (greetings, example chats, speech)</option>
+            <option value="facts">Facts only: add new details and lorebook entries</option>
+          </select>
+          <div class="hint">“Voice” needs a public feed with about 15+ of their own posts.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <!-- ─────────────────────────────── ADVANCED -->
   <section class="card collapsed">
     <h2>7 · Advanced</h2>
@@ -593,6 +631,26 @@
           <div class="hint">Discussion pages read for the audience report.</div>
         </div>
         <div class="field">
+          <label for="feed_items">Posts per feed</label>
+          <input type="number" id="feed_items" name="feed_items" placeholder="default 300">
+          <div class="hint">The most posts or comments read from each feed.</div>
+        </div>
+        <div class="field">
+          <label for="podcast_episodes">Podcast episodes</label>
+          <input type="number" id="podcast_episodes" name="podcast_episodes" placeholder="default 3">
+          <div class="hint">The most episodes transcribed per run (they take a while).</div>
+        </div>
+        <div class="field">
+          <label for="reddit_client_id">Reddit app ID <span class="muted">(only if Reddit refuses)</span></label>
+          <input type="text" id="reddit_client_id" name="reddit_client_id" placeholder="e.g. from reddit.com/prefs/apps (script app)">
+          <div class="hint">Reddit limits anonymous reading. A free “script” app gives a steady connection.</div>
+        </div>
+        <div class="field">
+          <label for="reddit_client_secret">Reddit app secret</label>
+          <input type="password" id="reddit_client_secret" name="reddit_client_secret">
+          <div class="hint">Never stored in the creator folder.</div>
+        </div>
+        <div class="field">
           <label for="scan_depth">Lorebook scan depth</label>
           <input type="number" id="scan_depth" name="scan_depth" placeholder="default 3">
           <div class="hint">Recent messages checked for lorebook keywords.</div>
@@ -627,6 +685,7 @@
     <div class="actions">
       <button class="btn primary" id="btnRun">Build card</button>
       <button class="btn" id="btnRebuild" disabled title="Rewrite the card from the saved research – fast, no searching">Rebuild writing only</button>
+      <button class="btn" id="btnRefine" title="Refine the card picked in section 8 with the new material">Refine card</button>
       <button class="btn" id="btnSave">Save</button>
       <button class="btn" id="btnCancel" disabled>Cancel</button>
     </div>
@@ -696,8 +755,15 @@ function showErrors(list) {
   box.innerHTML = list.map(e => "• " + e.replace(/</g, "&lt;")).join("<br>"); box.style.display = "block";
 }
 
+function renderCards(info) {
+  const rc = $("#refine_card"), keepCard = rc.value; rc.length = 0;
+  (info.cards || []).forEach(c => rc.add(new Option(c.replace(/^output\//, ""), c)));
+  if (!rc.length) rc.add(new Option("Build a card first, or upload one →", ""));
+  if (keepCard && [...rc.options].some(o => o.value === keepCard)) rc.value = keepCard;
+}
 function renderFiles(info) {
-  for (const kind of ["references", "avatar", "sprites", "fullbody", "sources", "audio"]) {
+  renderCards(info);
+  for (const kind of ["references", "avatar", "sprites", "fullbody", "sources", "audio", "card"]) {
     const box = $("#files-" + kind); box.innerHTML = "";
     (info.files[kind] || []).forEach(name => {
       const chip = document.createElement("span"); chip.className = "chip"; chip.textContent = name;
@@ -720,6 +786,7 @@ function renderOutputs(list) {
 function applyInfo(info) {
   slug = info.slug;
   $("#brief").value = info.brief; $("#limits").value = info.limits; $("#urls").value = info.urls;
+  $("#feeds").value = info.feeds || "";
   renderFiles(info); renderOutputs(info.outputs);
   $("#btnRebuild").disabled = !info.has_dossier || !!job;
   $("#folder").textContent = "Folder: " + info.folder;
@@ -746,7 +813,7 @@ async function loadTalents(select) {
 }
 $("#talentPicker").addEventListener("change", async e => {
   if (!e.target.value) { form.reset(); slug = ""; applyMode(); $("#brief").value = $("#limits").value = $("#urls").value = "";
-    ["references","avatar","sprites","fullbody","sources","audio"].forEach(k => $("#files-" + k).innerHTML = ""); renderOutputs([]);
+    ["references","avatar","sprites","fullbody","sources","audio","card"].forEach(k => $("#files-" + k).innerHTML = ""); renderOutputs([]);
     $("#folder").textContent = ""; $("#btnRebuild").disabled = true; return; }
   const info = await api("/api/talent/" + e.target.value);
   fill({ name: info.settings.name, ...info.settings }); applyInfo(info); toast("Loaded " + (info.settings.name || info.slug));
@@ -757,11 +824,12 @@ async function ensureTalent() {
   if (!name) { showErrors(["Enter a name first. It creates the creator's folder."]); $("#name").focus(); throw new Error("no name"); }
   if (!slug || $("#talentPicker").value !== slug) {
     const info = await api("/api/talent", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
-    const keep = { brief: $("#brief").value, limits: $("#limits").value, urls: $("#urls").value };
+    const keep = { brief: $("#brief").value, limits: $("#limits").value, urls: $("#urls").value, feeds: $("#feeds").value };
     applyInfo(info);
     if (keep.brief.trim()) $("#brief").value = keep.brief;
     if (keep.limits.trim()) $("#limits").value = keep.limits;
     if (keep.urls.trim()) $("#urls").value = keep.urls;
+    if (keep.feeds.trim()) $("#feeds").value = keep.feeds;
     await loadTalents(info.slug);
   }
 }
@@ -772,7 +840,11 @@ $$(".drop").forEach(drop => {
   const send = async files => {
     try { await ensureTalent(); } catch (e) { return; }
     for (const f of files) {
-      try { renderFiles(await api(`/api/upload?talent=${slug}&kind=${drop.dataset.kind}&filename=${encodeURIComponent(f.name)}`, { method: "PUT", body: f })); }
+      try {
+        const info = await api(`/api/upload?talent=${slug}&kind=${drop.dataset.kind}&filename=${encodeURIComponent(f.name)}`, { method: "PUT", body: f });
+        renderFiles(info);
+        if (drop.dataset.kind === "card") { const up = (info.cards || []).filter(c => c.startsWith("cards/")); if (up.length) $("#refine_card").value = up[up.length - 1]; }
+      }
       catch (err) { showErrors([err.message]); }
     }
     input.value = ""; toast("Saved to the creator folder");
@@ -807,7 +879,10 @@ function colour(line) {
 // Progress: the app logs each stage; map them to a percentage and a plain-English label.
 const STAGES = [
   [/Reusing settings|Creator source|Link hub|Wikipedia:|Loaded \d+\/\d+ pages|Following|Adult-platform|Reading \d+ web pages|Handles found/, 8, "Reading the sources"],
+  [/Collecting \d+ public feed/, 6, "Collecting public feeds"],
   [/Transcribing /, 10, "Transcribing audio"],
+  [/Measuring their voice/, 50, "Measuring how they talk"],
+  [/Refining the card/, 84, "Refining the card"],
   [/Extracting facts from/, 18, "Reading pages with the AI"],
   [/Conglomerating/, 46, "Building the profile"],
   [/Profile coverage/, 52, "Checking what's missing"],
@@ -841,12 +916,12 @@ async function start(kind) {
   showErrors([]);
   try { await ensureTalent(); } catch (e) { return; }
   let j;
-  try { j = await api(kind === "rebuild" ? "/api/rebuild" : "/api/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(collect()) }); }
+  try { j = await api({ rebuild: "/api/rebuild", refine: "/api/refine" }[kind] || "/api/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(collect()) }); }
   catch (e) { showErrors(e.errors || [e.message]); return; }
   job = j.job; since = 0; $("#log").innerHTML = ""; renderOutputs([]);
   problems = 0; allText = []; $("#probCount").textContent = ""; $("#cFile").removeAttribute("href");
-  pct = kind === "rebuild" ? 70 : 2; stageText = kind === "rebuild" ? "Rewriting from saved research" : "Starting"; setProgress("running");
-  $("#btnRun").disabled = $("#btnRebuild").disabled = true; $("#btnCancel").disabled = false;
+  pct = kind === "rebuild" ? 70 : 2; stageText = { rebuild: "Rewriting from saved research", refine: "Refining: reading the new material" }[kind] || "Starting"; setProgress("running");
+  $("#btnRun").disabled = $("#btnRebuild").disabled = $("#btnRefine").disabled = true; $("#btnCancel").disabled = false;
   setStatus("running", kind === "rebuild" ? "Rewriting the card…" : "Researching and building… this can take several minutes.");
   poll();
 }
@@ -868,12 +943,13 @@ async function poll() {
     else { stageText = j.status === "cancelled" ? "Cancelled" : `Stopped at: ${stageText || "start"}. Check Problems in the console.`; setProgress("failed"); }
     const msg = { done: "Finished. Your files are below and in the creator folder.", failed: "The run stopped. See the last lines of the log; research already done is kept.", cancelled: "Cancelled." }[j.status];
     setStatus(j.status === "done" ? "done" : "failed", msg);
-    job = null; $("#btnRun").disabled = false; $("#btnCancel").disabled = true;
+    job = null; $("#btnRun").disabled = $("#btnRefine").disabled = false; $("#btnCancel").disabled = true;
     const info = await api("/api/talent/" + slug); applyInfo(info); await loadTalents(slug);
   } catch (e) { pollTimer = setTimeout(poll, 2500); }
 }
 $("#btnRun").addEventListener("click", () => start("run"));
 $("#btnRebuild").addEventListener("click", () => start("rebuild"));
+$("#btnRefine").addEventListener("click", () => { if (!$("#refine_card").value) { showErrors(["Pick or upload the card to refine in section 8."]); return; } start("refine"); });
 $("#btnCancel").addEventListener("click", async () => { if (job) await api(`/api/job/${job}/cancel`, { method: "POST" }); });
 
 applyMode(); loadTalents();
