@@ -301,7 +301,8 @@ def build_command(slug: str, form: dict, rebuild: bool = False) -> tuple[list[st
                       ("avatar_style", "--avatar-style"), ("marinara_user", "--marinara-user")):
         if _s(form, key):
             a += [flag, _s(form, key)]
-    for key, flag, choices in (("browser", "--browser", {"auto", "off", "always", "visible"}),
+    for key, flag, choices in (("thinking", "--thinking", {"auto", "on", "off"}),
+                               ("browser", "--browser", {"auto", "off", "always", "visible"}),
                                ("style", "--style", {"roleplay", "chat"}), ("pov", "--pov", {"third", "first"}),
                                ("spec", "--spec", {"v2", "v3"}), ("json_mode", "--json-mode", {"auto", "on", "off"}),
                                ("search_provider", "--search-provider",

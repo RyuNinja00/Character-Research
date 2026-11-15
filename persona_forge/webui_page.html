@@ -419,6 +419,15 @@
           <div class="envnote" id="env-max_tokens"></div><div class="hint">Featherless (32K context): <b>6144</b>.</div>
         </div>
         <div class="field">
+          <label for="thinking">Model “thinking”</label>
+          <select id="thinking" name="thinking">
+            <option value="">Auto: ask reasoning models (Qwen 3 etc.) to answer directly</option>
+            <option value="off">Off: always ask the model to skip thinking</option>
+            <option value="on">On: let the model think (needs a high Max reply tokens)</option>
+          </select>
+          <div class="hint">Some models write long “thinking” before answering, which can use up the whole reply (“the reply had no facts list”).</div>
+        </div>
+        <div class="field">
           <label for="json_mode">JSON mode</label>
           <select id="json_mode" name="json_mode">
             <option value="">Default (auto)</option><option value="auto">auto</option><option value="on">on</option><option value="off">off</option>

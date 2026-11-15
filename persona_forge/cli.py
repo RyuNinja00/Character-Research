@@ -128,6 +128,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Cheaper/faster model for per-page fact extraction (defaults to --model)")
     g.add_argument("--max-tokens", type=int, default=int(env("LLM_MAX_TOKENS", "8192")))
     g.add_argument("--json-mode", choices=["auto", "on", "off"], default=env("LLM_JSON_MODE", "auto"))
+    g.add_argument("--thinking", choices=["auto", "on", "off"], default=env("LLM_THINKING", "auto"),
+                   help="Reasoning models (Qwen3…) write out 'thinking' that can use up the reply. auto = ask known "
+                        "reasoning models to answer directly; off = always ask; on = never ask")
     g.add_argument("--workers", type=int, default=4, help="Parallel LLM calls (lower this for local models)")
     g.add_argument("--chunk-chars", type=int, default=8000, help="Source chunk size sent to the extractor")
 
@@ -582,11 +585,12 @@ def main(argv: list[str] | None = None) -> int:
 
     cache = None if args.no_cache else DiskCache(Path(args.cache_dir))
     main_llm = LLMClient(
-        LLMConfig(args.base_url, args.api_key, args.model, max_tokens=args.max_tokens, json_mode=args.json_mode), cache
+        LLMConfig(args.base_url, args.api_key, args.model, max_tokens=args.max_tokens, json_mode=args.json_mode,
+                  thinking=args.thinking), cache
     )
     extract_llm = (
         LLMClient(LLMConfig(args.base_url, args.api_key, args.extract_model, max_tokens=min(4096, args.max_tokens),
-                            json_mode=args.json_mode), cache, fallback_model=args.model)
+                            json_mode=args.json_mode, thinking=args.thinking), cache, fallback_model=args.model)
         if args.extract_model and args.extract_model != args.model
         else main_llm
     )

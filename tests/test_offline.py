@@ -154,6 +154,29 @@ class FakeLLM(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
+        variant = next((m for m in ("THINKONLY", "BARELIST", "CAPSKEYS", "CUTLENGTH") if m in user_msg), "")
+        if variant:
+            finish = "stop"
+            fact = {"category": "identity", "subject": "Ada", "fact": "Countess of Lovelace", "confidence": "high"}
+            if variant == "THINKONLY":
+                asked_direct = "/no_think" in user_msg and (body.get("chat_template_kwargs") or {}).get("enable_thinking") is False
+                content = (json.dumps({"relevant": True, "facts": [fact]}) if asked_direct
+                           else "<think>Okay, let me go through this chapter carefully. " + "Hmm. " * 400)
+                finish = "stop" if asked_direct else "length"
+            elif variant == "BARELIST":
+                content = json.dumps([fact])
+            elif variant == "CAPSKEYS":
+                content = json.dumps({"Relevant": True, "Extracted_Facts": [{"Category": "identity", "Fact": "Countess"}]})
+            else:
+                FakeLLM.cut_calls = getattr(FakeLLM, "cut_calls", 0) + 1
+                content, finish = '{"relevant": true, "facts": [' + json.dumps(fact) + ', {"cat', "length"
+            data = json.dumps({"choices": [{"message": {"content": content}, "finish_reason": finish}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if "BROKENJSON" in user_msg or ("UNUSABLE" in user_msg and "(section" not in user_msg):
             if "BROKENJSON" in user_msg:  # long reply, unescaped quotes, cut off mid-item
                 content = ('{"relevant": true, "aliases": [], "facts": [{"category": "quote", "subject": "Ada", '
@@ -830,6 +853,26 @@ def main():
               "recovery reported with a short file name")
         check("retrying in two smaller halves" in xlog.getvalue() and any("Lovelace" in f.fact or f.fact for f in facts_x),
               "unusable reply → piece retried in halves")
+
+        # ── Reasoning ("thinking") models, other reply shapes, cut-off replies never cached
+        from persona_forge.util import DiskCache as _DC
+        src_of = lambda m: [Source("https://e.org/" + m, m, m + " " + "Ada Lovelace text. " * 40, "user")]  # noqa: E731
+        f_q, _, _ = _xf(_LC(_LCfg(llm_url, "", "huihui-ai/Huihui-Qwen3.5-27B-abliterated")), src_of("THINKONLY"), _Opt(name="Ada Lovelace"))
+        check([f.fact for f in f_q] == ["Countess of Lovelace"], "Qwen-style model asked to answer directly (auto) → facts")
+        tlog = io.StringIO()
+        with contextlib.redirect_stderr(tlog):
+            f_t, _, _ = _xf(_LC(_LCfg(llm_url, "", "huihui-ai/Huihui-Qwen3.5-27B-abliterated", thinking="on")),
+                            src_of("THINKONLY"), _Opt(name="Ada Lovelace"))
+        check(not f_t and "only 'thought'" in tlog.getvalue() and "Thinking → Off" in tlog.getvalue(),
+              "thinking-only reply explained in the console (what the model sent and what to change)")
+        f_b, _, _ = _xf(_LC(_LCfg(llm_url, "", "x")), src_of("BARELIST"), _Opt(name="Ada Lovelace"))
+        f_c, _, _ = _xf(_LC(_LCfg(llm_url, "", "x")), src_of("CAPSKEYS"), _Opt(name="Ada Lovelace"))
+        check(f_b and f_c and f_c[0].fact == "Countess", "bare fact lists and differently-named keys accepted")
+        FakeLLM.cut_calls = 0
+        cl = _LC(_LCfg(llm_url, "", "x"), cache=_DC(Path(tmp) / "cutcache"))
+        _xf(cl, src_of("CUTLENGTH"), _Opt(name="Ada Lovelace"))
+        _xf(cl, src_of("CUTLENGTH"), _Opt(name="Ada Lovelace"))
+        check(FakeLLM.cut_calls == 2, "cut-off replies are never cached (a re-run asks again)")
 
         # ── A page-reading model the provider doesn't know falls back to the main model
         fb = io.StringIO()

@@ -161,22 +161,53 @@ def _short(src: Source) -> str:
     return src.url
 
 
+def _facts_payload(data) -> dict | None:
+    """Accept the shapes models actually send: {"facts": [...]}, {"Facts": [...]}, {"extracted_facts": [...]},
+    {"result": {"facts": [...]}} or just a bare list of facts."""
+    def is_fact_list(v) -> bool:
+        return isinstance(v, list) and any(isinstance(x, dict) and ("fact" in {k.lower() for k in x}) for x in v)
+
+    if is_fact_list(data):
+        return {"relevant": True, "aliases": [], "facts": data}
+    if not isinstance(data, dict):
+        return None
+    low = {str(k).lower(): v for k, v in data.items()}
+    if "facts" in low and isinstance(low["facts"], list):
+        out = dict(low)
+    else:
+        out = None
+        for v in list(low.values()) + [vv for v in low.values() if isinstance(v, dict) for vv in v.values()]:
+            if is_fact_list(v):
+                out = dict(low)
+                out["facts"] = v
+                break
+        if out is None:
+            return {"relevant": False, "aliases": [], "facts": []} if low.get("relevant") is False else None
+    out["facts"] = [{str(k).lower(): v for k, v in f.items()} for f in out["facts"] if isinstance(f, dict)]
+    out.setdefault("relevant", True)
+    return out
+
+
 def extract_part(llm: LLMClient, system: str, src: Source, text: str, i: int, n: int, label: str,
                  depth: int = 0) -> dict:
     """Extract one piece. If the reply can't be used at all, split the piece in half and try each half."""
     part = f"PART {i}/{n}" + (f" (section {depth + 1})" if depth else "")
     user = f"SOURCE: {label}\nURL: {src.url}\n{part}\n\n{text}"
     try:
-        data = llm.chat_json(system, user, temperature=0.1, max_tokens=4096)
-        if not isinstance(data, dict) or not ("facts" in data or data.get("relevant") is False):
+        raw = llm.chat_json(system, user, temperature=0.1, max_tokens=4096)
+        salvaged = isinstance(raw, dict) and raw.pop("_salvaged", False)
+        data = _facts_payload(raw)
+        if data is None:
             raise ValueError("the reply had no facts list")
-        if data.pop("_salvaged", False):
+        if salvaged:
             log(f"  i {_short(src)} part {i}: reply was cut off or partly malformed – kept "
                 f"{len(data.get('facts') or [])} complete facts")
         return data if isinstance(data, dict) else {}
     except Exception as e:  # noqa: BLE001
+        preview = llm.last_reply_preview()
         if depth < 2 and len(text) > 1500:
-            log(f"  i {_short(src)} part {i}: unusable reply ({str(e)[:80]}) – retrying in two smaller halves")
+            log(f"  i {_short(src)} part {i}: unusable reply ({str(e)[:110]}) – retrying in two smaller halves"
+                + (f"\n    ↳ {preview}" if preview and depth == 0 else ""))
             mid = text.rfind("\n", 0, len(text) // 2 + 500)
             mid = mid if mid > len(text) // 4 else len(text) // 2
             a = extract_part(llm, system, src, text[:mid], i, n, label, depth + 1)
@@ -184,7 +215,7 @@ def extract_part(llm: LLMClient, system: str, src: Source, text: str, i: int, n:
             return {"relevant": bool(a.get("relevant") or b.get("relevant")),
                     "aliases": (a.get("aliases") or []) + (b.get("aliases") or []),
                     "facts": (a.get("facts") or []) + (b.get("facts") or [])}
-        log(f"  ! extraction failed for {_short(src)} part {i}: {e}")
+        log(f"  ! extraction failed for {_short(src)} part {i}: {e}" + (f"\n    ↳ {preview}" if preview else ""))
         return {}
 
 
