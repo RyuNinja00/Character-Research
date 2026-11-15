@@ -129,7 +129,7 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--max-tokens", type=int, default=int(env("LLM_MAX_TOKENS", "8192")))
     g.add_argument("--json-mode", choices=["auto", "on", "off"], default=env("LLM_JSON_MODE", "auto"))
     g.add_argument("--workers", type=int, default=4, help="Parallel LLM calls (lower this for local models)")
-    g.add_argument("--chunk-chars", type=int, default=12000, help="Source chunk size sent to the extractor")
+    g.add_argument("--chunk-chars", type=int, default=8000, help="Source chunk size sent to the extractor")
 
     g = p.add_argument_group("managed creator / adult cards")
     g.add_argument("--talent", action="store_true",

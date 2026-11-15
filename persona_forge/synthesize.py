@@ -55,7 +55,7 @@ class Options:
     talent: bool = False               # managed-creator mode: public persona only, creator-safety privacy rules
     boundaries: str = ""               # creator's hard limits / rules, embedded verbatim in the card
     workers: int = 4
-    chunk_chars: int = 12_000
+    chunk_chars: int = 8_000
     max_facts_chars: int = 45_000      # per reduce call
     dropped_third_party_intimacy: int = 0  # intimacy facts discarded because they came from third-party sites
     dropped_excluded_themes: int = 0       # minor-coded / excluded themes discarded
@@ -142,6 +142,8 @@ Categories: {", ".join(CATEGORIES)}
   and in "fact" say how prominent it is with evidence, e.g. "12 of ~40 listed clips; also in profile tags".
 
 Keep every fact atomic, concrete and specific (names, dates, numbers). Do not invent anything.
+Return at most 50 facts for this part, most important first. Keep each "fact" under 40 words, and never put
+double quote marks inside a value (use single quotes for quoted speech).
 {privacy_rules(opts)}
 
 JSON schema:
@@ -150,6 +152,40 @@ JSON schema:
   "facts": [{{"category": "...", "subject": "who/what the fact is about (short)", "fact": "...",
              "when": "date or period if known", "confidence": "high|medium|low"}}]}}
 If the text is not about {opts.name}, return {{"relevant": false, "aliases": [], "facts": []}}."""
+
+
+def _short(src: Source) -> str:
+    """A readable name for log lines (not a long local path)."""
+    if src.url.startswith("file://"):
+        return src.url.replace("\\", "/").rsplit("/", 1)[-1]
+    return src.url
+
+
+def extract_part(llm: LLMClient, system: str, src: Source, text: str, i: int, n: int, label: str,
+                 depth: int = 0) -> dict:
+    """Extract one piece. If the reply can't be used at all, split the piece in half and try each half."""
+    part = f"PART {i}/{n}" + (f" (section {depth + 1})" if depth else "")
+    user = f"SOURCE: {label}\nURL: {src.url}\n{part}\n\n{text}"
+    try:
+        data = llm.chat_json(system, user, temperature=0.1, max_tokens=4096)
+        if not isinstance(data, dict) or not ("facts" in data or data.get("relevant") is False):
+            raise ValueError("the reply had no facts list")
+        if data.pop("_salvaged", False):
+            log(f"  i {_short(src)} part {i}: reply was cut off or partly malformed – kept "
+                f"{len(data.get('facts') or [])} complete facts")
+        return data if isinstance(data, dict) else {}
+    except Exception as e:  # noqa: BLE001
+        if depth < 2 and len(text) > 1500:
+            log(f"  i {_short(src)} part {i}: unusable reply ({str(e)[:80]}) – retrying in two smaller halves")
+            mid = text.rfind("\n", 0, len(text) // 2 + 500)
+            mid = mid if mid > len(text) // 4 else len(text) // 2
+            a = extract_part(llm, system, src, text[:mid], i, n, label, depth + 1)
+            b = extract_part(llm, system, src, text[mid:], i, n, label, depth + 1)
+            return {"relevant": bool(a.get("relevant") or b.get("relevant")),
+                    "aliases": (a.get("aliases") or []) + (b.get("aliases") or []),
+                    "facts": (a.get("facts") or []) + (b.get("facts") or [])}
+        log(f"  ! extraction failed for {_short(src)} part {i}: {e}")
+        return {}
 
 
 def extract_facts(llm: LLMClient, sources: list[Source], opts: Options) -> tuple[list[Fact], list[str], list[Source]]:
@@ -170,11 +206,7 @@ def extract_facts(llm: LLMClient, sources: list[Source], opts: Options) -> tuple
         src, ch, i, n = job
         label = "CREATOR BRIEF (authoritative, supplied by the creator's team)" if src.kind == "brief" else src.title
         user = f"SOURCE: {label}\nURL: {src.url}\nPART {i}/{n}\n\n{ch}"
-        try:
-            result = src, llm.chat_json(system, user, temperature=0.1, max_tokens=4096)
-        except Exception as e:  # noqa: BLE001
-            log(f"  ! extraction failed for {src.url} part {i}: {e}")
-            result = src, {}
+        result = src, extract_part(llm, system, src, ch, i, n, label)
         with lock:
             done[0] += 1
             log(f"  … {done[0]}/{len(jobs)} chunks read")

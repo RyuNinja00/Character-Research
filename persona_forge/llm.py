@@ -164,6 +164,8 @@ class LLMClient:
                     "Mainstream models often refuse adult content – use a model/provider that allows it for --nsfw "
                     "cards (e.g. via OpenRouter or a local model), or try a different --model."
                 )
+            if len(text) > 12_000:
+                raise ValueError("the reply was too long and was cut off before it ended")
             debug("JSON parse failed; asking the model to fix its output")
             fix = self.chat(
                 "You repair malformed JSON. Output only the corrected JSON object.",

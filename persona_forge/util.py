@@ -164,6 +164,84 @@ def _repair(candidate: str) -> str:
     return s + "".join(reversed(stack))
 
 
+def _escape_inner_quotes(s: str) -> str:
+    """Escape quote marks that sit *inside* a string value (e.g. dialogue: "she said "hi" to me").
+    A quote only ends a string if the next non-space character is , } ] : or the end of the text."""
+    out = []
+    in_str = False
+    esc = False
+    n = len(s)
+    for i, ch in enumerate(s):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                j = i + 1
+                while j < n and s[j] in " \t\r\n":
+                    j += 1
+                if j >= n or s[j] in ",}]:":
+                    in_str = False
+                else:
+                    out.append("\\")
+            elif ch in "\n\r":
+                out.append("\\n" if ch == "\n" else "")
+                continue
+        elif ch == '"':
+            in_str = True
+        out.append(ch)
+    return "".join(out)
+
+
+def salvage_json_items(text: str, keys: tuple[str, ...] = ("facts", "entries", "insights")) -> dict | None:
+    """Last resort for a cut-off or partly broken reply: keep every complete, valid object in the main list
+    (e.g. "facts": [...]) and drop only the broken ones."""
+    result: dict = {}
+    for key in keys:
+        m = re.search(r'"%s"\s*:\s*\[' % key, text)
+        if not m:
+            continue
+        items, i, n = [], m.end(), len(text)
+        while i < n:
+            while i < n and text[i] in " \t\r\n,":
+                i += 1
+            if i >= n or text[i] == "]":
+                break
+            if text[i] != "{":
+                i += 1
+                continue
+            obj = _balanced_slice(text[i:], "{", "}")
+            if not obj:
+                break
+            complete = obj.endswith("}")
+            for attempt in (obj, _escape_inner_quotes(obj)):
+                try:
+                    v = json.loads(attempt)
+                    if isinstance(v, dict) and complete:
+                        items.append(v)
+                    break
+                except json.JSONDecodeError:
+                    continue
+            i += len(obj)
+        if items:
+            result[key] = items
+    if not result:
+        return None
+    for flag in ("relevant",):
+        fm = re.search(r'"%s"\s*:\s*(true|false)' % flag, text)
+        if fm:
+            result[flag] = fm.group(1) == "true"
+    am = re.search(r'"aliases"\s*:\s*(\[[^\]]*\])', text)
+    if am:
+        try:
+            result["aliases"] = json.loads(am.group(1))
+        except json.JSONDecodeError:
+            pass
+    result["_salvaged"] = True
+    return result
+
+
 def parse_json_loose(text: str) -> Any:
     """Parse JSON from an LLM reply that may include prose, code fences or truncation."""
     if text is None:
@@ -180,13 +258,30 @@ def parse_json_loose(text: str) -> Any:
             return json.loads(c)
         except json.JSONDecodeError:
             pass
-        for open_ch, close_ch in (("{", "}"), ("[", "]")):
+        brackets = [("{", "}"), ("[", "]")] if c.lstrip()[:1] != "[" else [("[", "]"), ("{", "}")]
+        if "{" in c and c.lstrip()[:1] != "[":
+            brackets = [("{", "}")]  # an object reply: never fall back to some inner list
+        for open_ch, close_ch in brackets:
             sl = _balanced_slice(c, open_ch, close_ch)
             if not sl:
                 continue
-            for attempt in (sl, _repair(sl)):
+            fixed_quotes = _escape_inner_quotes(sl)
+            for attempt in (sl, fixed_quotes):
                 try:
                     return json.loads(attempt)
                 except json.JSONDecodeError:
                     continue
+            # Cut-off reply: keep only complete items from the main list; closing the brackets would keep a
+            # half-written last item.
+            salvaged = salvage_json_items(c)
+            if salvaged:
+                return salvaged
+            for attempt in (_repair(sl), _repair(fixed_quotes)):
+                try:
+                    return json.loads(attempt)
+                except json.JSONDecodeError:
+                    continue
+    salvaged = salvage_json_items(text)
+    if salvaged:
+        return salvaged
     raise ValueError(f"could not parse JSON from LLM reply: {text[:300]!r}")

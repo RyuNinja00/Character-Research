@@ -154,6 +154,21 @@ class FakeLLM(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
+        if "BROKENJSON" in user_msg or ("UNUSABLE" in user_msg and "(section" not in user_msg):
+            if "BROKENJSON" in user_msg:  # long reply, unescaped quotes, cut off mid-item
+                content = ('{"relevant": true, "aliases": [], "facts": [{"category": "quote", "subject": "Ada", '
+                           '"fact": "She wrote "poetical science" in a letter", "confidence": "high"}, '
+                           '{"category": "identity", "subject": "Ada", "fact": "Countess of Lovelace"}, '
+                           '{"category": "work", "subject": "Note G", "fact": "An algorithm that was cut o')
+            else:
+                content = "Here are the facts: [[[ not json"
+            data = json.dumps({"choices": [{"message": {"content": content}}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if "Nova" in system:
             out = nova_reply(system, user_msg)
         elif "meticulous research assistant" in system:
@@ -796,6 +811,25 @@ def main():
             check("Transcript: interview.wav" in rv, "transcript listed as a source in review.md")
         else:
             print("  (audio tests skipped: ffmpeg not installed)")
+
+        # ── Cut-off / malformed AI replies: keep complete facts, fix stray quotes, retry in halves
+        from persona_forge.llm import LLMClient as _LC, LLMConfig as _LCfg
+        from persona_forge.synthesize import Options as _Opt, extract_facts as _xf
+        xlog = io.StringIO()
+        with contextlib.redirect_stderr(xlog):
+            facts_x, _, _ = _xf(_LC(_LCfg(llm_url, "", "x")), [
+                Source("file://R:/Card AI Builder Project/talent/x/sources/Chapter_1_Intro.txt", "Chapter 1",
+                       "BROKENJSON " + "Ada Lovelace text. " * 50, "brief"),
+                Source("https://example.org/long", "Long", "UNUSABLE\n" + ("Ada Lovelace wrote notes.\n" * 200), "user"),
+            ], _Opt(name="Ada Lovelace"))
+        fx = [f.fact for f in facts_x]
+        check('She wrote "poetical science" in a letter' in fx and "Countess of Lovelace" in fx,
+              "unescaped quotes repaired; complete facts kept from a cut-off reply")
+        check(not any("cut o" in f for f in fx), "half-written last fact dropped")
+        check("kept 2 complete facts" in xlog.getvalue() and "Chapter_1_Intro.txt part 1" in xlog.getvalue(),
+              "recovery reported with a short file name")
+        check("retrying in two smaller halves" in xlog.getvalue() and any("Lovelace" in f.fact or f.fact for f in facts_x),
+              "unusable reply → piece retried in halves")
 
         # ── A page-reading model the provider doesn't know falls back to the main model
         fb = io.StringIO()
