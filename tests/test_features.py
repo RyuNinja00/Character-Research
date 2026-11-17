@@ -68,7 +68,7 @@ PAGES = {STORE: LIST1, f"{STORE}?page=2": LIST2, f"{MV}/Video/3/joi-countdown": 
          f"{MV}/Video/4/stepbro-again": DETAIL4, f"{MV}/Video/2/pov-gamer-tease": DETAIL2}
 
 
-def fake_fetch(self, url, title="", kind="web", keep_html=False, via=""):
+def fake_fetch(self, url, title="", kind="web", keep_html=False, via="", render=False):
     html = PAGES.get(url)
     self._fetched = getattr(self, "_fetched", []) + [url]
     return Source(url, title or url, "page text " * 20, kind, {"html": html}) if html else None
@@ -148,7 +148,7 @@ def test_socials():
                                                 + html + "</body></html>",
              "https://x.com/ivywren": "<html><head><meta property='og:description' content='gamer, cosplayer, menace'></head></html>"}
 
-    def fetch(url, title="", kind="web", keep_html=False, via=""):
+    def fetch(url, title="", kind="web", keep_html=False, via="", render=False):
         h = pages.get(url)
         return Source(url, title or url, "x" * 80, kind, {"html": h}) if h else None
 
@@ -460,11 +460,85 @@ def test_cli_end_to_end(tmp: Path):
     check(saved.get("card_budget") == 400, "card budget remembered for rebuilds")
 
 
+class _Resp:
+    def __init__(self, text, status=200):
+        self.text, self.status_code, self.headers, self.url = text, status, {"content-type": "text/html"}, ""
+
+
+class FakeBrowser:
+    name = "fake chrome"
+
+    def __init__(self, pages):
+        self.pages, self.loaded = pages, []
+
+    def load(self, url):
+        from persona_forge.browser import BrowserPage
+
+        self.loaded.append(url)
+        return BrowserPage(url, self.pages.get(url, "<html><body>not found</body></html>"),
+                           200 if url in self.pages else 404)
+
+
+def test_browser_modes():
+    """The Page reader setting (Smart / Always / Visible / Fast only) applies to every new scraping step."""
+    print("real-browser reader in the new scraping steps")
+    shell = ("<html><head><title>Ivy Wren Store</title></head><body><article><p>"
+             + "Welcome to my store, new clips every week, thanks for the support! " * 12
+             + "</p></article><div id=app></div></body></html>")  # plenty of text, but the clip grid needs JavaScript
+    store = f"{MV}/Profile/123/ivywren/Store/Videos/"
+    fast = {store: shell, f"{MV}/Video/3/joi-countdown": "<html><body><div id=app></div>" + "x " * 200 + "</body></html>"}
+    rendered = {store: LIST2.replace("</ul>", f'<li><a href="{MV}/Video/3/joi-countdown">JOI Countdown in Cosplay</a></li></ul>'),
+                f"{MV}/Video/3/joi-countdown": DETAIL3, f"{MV}/Video/4/stepbro-again": DETAIL4}
+
+    def make(mode):
+        r = Researcher(search_provider="none", browser_mode=mode)
+        r._get = lambda url, retry: _Resp(fast.get(url, "<html><body>" + "page text " * 50 + "</body></html>"))
+        fb = FakeBrowser(rendered)
+        r.browser = (lambda: fb) if mode != "off" else (lambda: None)
+        return r, fb
+
+    r, fb = make("auto")
+    cat = clips.read_store(r, store, max_pages=1, max_details=5)
+    check(cat and len(cat.clips) == 2 and cat.rendered, "Smart: JS-built clip grid → re-read with the real browser")
+    check(f"{MV}/Video/3/joi-countdown" in fb.loaded and "cosplay" in next(c for c in cat.clips if "JOI" in c.title).tags,
+          "Smart: clip pages of that store also read with the browser")
+    r, fb = make("off")
+    cat = clips.read_store(r, store, max_pages=1, max_details=5)
+    check(cat is None and not fb.loaded, "Fast reader only: the browser is never started")
+    r, fb = make("always")
+    cat = clips.read_store(r, store, max_pages=1, max_details=5)
+    check(cat and fb.loaded[0] == store, "Always: the first load already uses the browser")
+
+    # socials: bio-only shell from the fast reader, posts after rendering
+    tik = "https://www.tiktok.com/@ivywren"
+    fast[tik] = "<html><head><meta property='og:description' content='Ivy Wren – cosplay + horror games'></head><body>" + "y " * 200 + "</body></html>"
+    rendered[tik] = ("<html><head><meta property='og:description' content='Ivy Wren – cosplay + horror games'></head><body>"
+                     '<script type="application/json" id="d">' + json.dumps({"items": [{"desc": "new cosplay drop tonight, who is ready", "author": {"uniqueId": "ivywren"}}]})
+                     + "</script></body></html>")
+    r, fb = make("auto")
+    prof = socials.SocialProfile("tiktok", "ivywren", tik, True, "test")
+    srcs = socials.read_pages(r, [prof], "Ivy Wren")
+    check(prof.posts == ["new cosplay drop tonight, who is ready"] and tik in fb.loaded and srcs,
+          "Smart: social feed built by JavaScript → read with the browser")
+    r, fb = make("off")
+    prof = socials.SocialProfile("tiktok", "ivywren", tik, True, "test")
+    socials.read_pages(r, [prof], "Ivy Wren")
+    check(not prof.posts and not fb.loaded, "Fast reader only: bio only, no browser")
+    # confirming a guessed profile: empty JS shell → browser shows the bio that names them
+    tw = "https://www.twitch.tv/ivywren"
+    fast[tw] = "<html><body><div id=root></div>" + "z " * 200 + "</body></html>"
+    rendered[tw] = "<html><head><title>ivywren - Twitch</title></head><body><p>Ivy Wren streams horror games every night!!</p></body></html>"
+    r, fb = make("auto")
+    ok, how = socials.confirm_profile(r, "twitch", "ivywren", tw, "Ivy Wren", ["ivywren"], [])
+    check(ok and tw in fb.loaded, "Smart: guessed profile confirmed from the browser-rendered page")
+
+
 def main():
     with tempfile.TemporaryDirectory() as t:
         tmp = Path(t)
         cat = test_clips()
         test_socials()
+        test_browser_modes()
         test_confirm(cat)
         test_onboarding()
         test_budget()

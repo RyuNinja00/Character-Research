@@ -237,17 +237,32 @@ def confirm_profile(r: "Researcher", plat: str, handle: str, url: str, name: str
         elif plat == "reddit":
             j = r.http.get(f"{SOCIAL_ENDPOINTS['reddit']}/user/{handle}/about.json", timeout=r.timeout,
                            headers={"User-Agent": "PersonaForge/1.0 (profile check)"})
+            if j.status_code in (403, 429):  # Reddit refuses many scripted requests: read the profile page instead
+                page = r.fetch(url, kind="social", keep_html=True)
+                if not page:
+                    return False, "Reddit refused the check and the profile page didn't load"
+                text = f"{page.title} {page.text[:4000]} {page.meta.pop('html', '')[:200_000]}"
+                ok = names_them(text, name, handles, hubs, exclude=handle)
+                return ok, ("the profile names them / links their other accounts" if ok else
+                            "an account with this username exists, but nothing on it points to them")
             if j.status_code != 200:
-                return False, "no such account (or Reddit refused)"
+                return False, "no such account"
             d = (j.json() or {}).get("data", {})
             sub = d.get("subreddit") or {}
             text = f"{sub.get('title', '')} {sub.get('public_description', '')} {d.get('name', '')}"
         else:
             page = r.fetch(url, kind="social", keep_html=True)
+            html = page.meta.pop("html", "") if page else ""
+            text = f"{page.title} {page.text[:4000]} {html[:200_000]}" if page else ""
+            # JavaScript-built profile: the fast reader may get an empty shell. Look again in the real browser.
+            if not names_them(text, name, handles, hubs, exclude=handle) and r.can_render \
+                    and not (page and page.meta.get("rendered")):
+                rpage = r.fetch(url, kind="social", keep_html=True, render=True)
+                if rpage:
+                    page = rpage
+                    text = f"{rpage.title} {rpage.text[:4000]} {rpage.meta.pop('html', '')[:200_000]}"
             if not page:
                 return False, "profile didn't load (login wall or not found)"
-            html = page.meta.pop("html", "")
-            text = f"{page.title} {page.text[:4000]} {html[:200_000]}"
     except Exception as e:  # noqa: BLE001
         return False, f"couldn't check ({e.__class__.__name__})"
     if names_them(text, name, handles, hubs, exclude=handle):
@@ -285,11 +300,22 @@ def read_pages(r: "Researcher", profiles: list[SocialProfile], person: str, max_
         if not p.confirmed or p.platform not in PAGE_PLATFORMS:
             continue
         page = r.fetch(p.url, kind="social", keep_html=True)
-        if not page:
-            continue
-        html = page.meta.pop("html", "")
+        html = page.meta.pop("html", "") if page else ""
         bio = extract_meta(html) if html else ""
         p.posts = [c for c in captions_from_html(html, p.handle, max_posts) if c not in bio] if html else []
+        # No posts from the fast reader? Social pages build their feed with JavaScript: try the real browser
+        # (unless the Page reader is set to "Fast reader only").
+        if not p.posts and r.can_render and not (page and page.meta.get("rendered")):
+            rpage = r.fetch(p.url, kind="social", keep_html=True, render=True)
+            rhtml = rpage.meta.pop("html", "") if rpage else ""
+            if rhtml:
+                page, html = rpage, rhtml
+                bio = extract_meta(html) or bio
+                p.posts = [c for c in captions_from_html(html, p.handle, max_posts) if c not in bio]
+                if not p.posts:  # rendered page: the visible text holds the posts when there's no embedded JSON
+                    p.posts = _visible_posts(rpage.text, bio)
+        if not page:
+            continue
         lines = [f"[Public {p.platform} profile @{p.handle} – {person}'s own bio and posts as the page shows them "
                  "without logging in.]"]
         if bio:
@@ -303,6 +329,17 @@ def read_pages(r: "Researcher", profiles: list[SocialProfile], person: str, max_
         log(f"  {'✓' if p.posts else 'i'} {p.platform} @{p.handle}: bio" + (f" + {len(p.posts)} posts" if p.posts else
                                                                          " only (posts need a login on this site)"))
     return out
+
+
+def _visible_posts(text: str, bio: str, limit: int = 60) -> list[str]:
+    """Post-like lines from a rendered profile's visible text (skips menus, buttons and counters)."""
+    out = []
+    for line in (text or "").splitlines():
+        t = line.strip()
+        if 25 <= len(t) <= 600 and t not in bio and not re.fullmatch(r"[\d.,KMk ]+(followers|following|likes|posts|views)?",
+                                                                      t, re.I) and t not in out:
+            out.append(t)
+    return out[:limit]
 
 
 def render_md(person: str, profiles: list[SocialProfile]) -> str:

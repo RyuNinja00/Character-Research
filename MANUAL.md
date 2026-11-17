@@ -825,6 +825,13 @@ kinks and the confirm sheet. Excluded themes are removed before anything is used
 `clip_catalog.md` lists every clip and the tag table. Turn this off with **Read their clip stores** /
 `--no-clips`.
 
+**Page reader setting:** clip stores and social profiles follow the **Page reader** setting like every other
+page. In Smart mode, a store whose clip list or a profile whose posts are built by JavaScript is read again in the
+real browser automatically, and the rest of that store then uses the browser too. Always uses the browser
+from the start. Visible lets you complete “verify you're human” checks. Fast reader only never starts the browser.
+The Reddit and Bluesky profile checks use their public data services; if Reddit refuses, the profile page is read
+through the Page reader instead.
+
 Store layouts change. If a store reads 0 clips, open its video list in your browser, save the page (Ctrl+S →
 “Webpage, HTML only”) and add it under **Text sources**.
 

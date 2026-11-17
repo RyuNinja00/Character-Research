@@ -74,6 +74,7 @@ class ClipCatalog:
     pages_read: int = 0
     details_read: int = 0
     dropped_excluded: int = 0
+    rendered: bool = False          # this store needed the real browser (JavaScript-built pages)
 
     def tag_counts(self) -> Counter:
         c: Counter = Counter()
@@ -83,7 +84,8 @@ class ClipCatalog:
         return c
 
     def to_json(self) -> dict:
-        return {"platform": self.platform, "store_url": self.store_url, "clips": [c.__dict__ for c in self.clips],
+        return {"platform": self.platform, "store_url": self.store_url, "rendered": self.rendered,
+                "clips": [c.__dict__ for c in self.clips],
                 "tag_counts": self.tag_counts().most_common(), "pages_read": self.pages_read,
                 "details_read": self.details_read, "dropped_excluded": self.dropped_excluded}
 
@@ -351,12 +353,22 @@ def read_store(r: "Researcher", store_url: str, *, max_pages: int = 3, max_detai
         url, page_no = start, 1
         while url and page_no <= max_pages and url not in seen_pages:
             seen_pages.add(url)
-            page = r.fetch(url, kind="platform", keep_html=True, via=store_url if url != store_url else "")
+            via = store_url if url != store_url else ""
+            page = r.fetch(url, kind="platform", keep_html=True, via=via, render=cat.rendered)
             html = page.meta.pop("html", "") if page else ""
+            found = merge_clips(clips_from_structured(html, url), clips_from_links(html, url)) if html else []
+            # Many stores build the clip grid with JavaScript: the fast reader gets the page but no clips.
+            # Load it again in the real browser (unless the Page reader is set to "Fast reader only").
+            if not found and r.can_render and not (page and page.meta.get("rendered")):
+                page = r.fetch(url, kind="platform", keep_html=True, via=via, render=True)
+                html = page.meta.pop("html", "") if page else ""
+                found = merge_clips(clips_from_structured(html, url), clips_from_links(html, url)) if html else []
+                if found:
+                    cat.rendered = True  # the rest of this store needs the browser too
+                    log(f"  i {cat.platform}: clip list is built by JavaScript – reading this store with the real browser")
             if not html:
                 break
             cat.pages_read += 1
-            found = merge_clips(clips_from_structured(html, url), clips_from_links(html, url))
             if not found:
                 break
             collected.append(found)
@@ -367,13 +379,29 @@ def read_store(r: "Researcher", store_url: str, *, max_pages: int = 3, max_detai
     clips = merge_clips(*collected)
     # detail pages for clips the listing didn't describe
     need = [c for c in clips if c.url and (not c.tags or not c.description)][:max(0, max_details)]
+    tried_render = False
     for c in need:
-        page = r.fetch(c.url, kind="platform", keep_html=True, via=store_url)
+        page = r.fetch(c.url, kind="platform", keep_html=True, via=store_url, render=cat.rendered)
         html = page.meta.pop("html", "") if page else ""
-        if html and (d := clip_detail(html, c.url)):
+        d = clip_detail(html, c.url) if html else None
+        if (not d or not (d.tags or d.description)) and r.can_render and not tried_render \
+                and not (page and page.meta.get("rendered")):
+            tried_render = True  # try the browser once; keep using it only if it helps
+            page = r.fetch(c.url, kind="platform", keep_html=True, via=store_url, render=True)
+            html2 = page.meta.pop("html", "") if page else ""
+            d2 = clip_detail(html2, c.url) if html2 else None
+            if d2 and (d2.tags or d2.description):
+                d, cat.rendered = d2, True
+        if d:
             cat.details_read += 1
             clips = merge_clips(clips, [d])
     cat.clips, cat.dropped_excluded = drop_excluded(clips)
+    if not cat.clips:
+        log(f"  ! {plat}: no clips found on {store_url}" + ("" if r.can_render else
+            " – the clip list may need the real browser (Page reader isn't set to “Fast reader only”?)")
+            + ". If it opens in your browser, save its video list (Ctrl+S → “Webpage, HTML only”) and add it under "
+              "Text sources.")
+        return None
     log(f"  i {plat}: {len(cat.clips)} clips catalogued from {store_url} ({cat.pages_read} listing page(s), "
         f"{cat.details_read} clip page(s))" + (f", {cat.dropped_excluded} excluded item(s) removed" if cat.dropped_excluded else ""))
     return cat if cat.clips else None

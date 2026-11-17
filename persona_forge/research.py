@@ -682,8 +682,16 @@ class Researcher:
             pass
         return "\n".join(bits)
 
+    @property
+    def can_render(self) -> bool:
+        """True when the real-browser reader is allowed (Page reader setting isn't "Fast reader only")."""
+        return self.browser_mode != "off" and not self._browser_failed
+
     def fetch(self, url: str, title: str = "", kind: str = "web", keep_html: bool = False,
-              via: str = "") -> Source | None:
+              via: str = "", render: bool = False) -> Source | None:
+        """render=True: load this page with the real browser even if the fast reader could read it (used when the
+        fast reader's copy had text but not the JavaScript-built part we need, e.g. a clip grid or a post feed).
+        Ignored when the Page reader setting is "Fast reader only"."""
         url = normalize_url(url)
         user_supplied = kind in ("user", "hub", "platform", "social")
         keep_html = keep_html or kind == "hub"
@@ -698,13 +706,14 @@ class Researcher:
             log(f"  ! skipped {label} ({reason})")
             return None
         if self.cache and (hit := self.cache.get("page", url)):  # failures are never cached
-            if not keep_html or hit.get("meta", {}).get("html"):
+            if (not keep_html or hit.get("meta", {}).get("html")) and (not render or hit.get("meta", {}).get("rendered")):
                 return Source(**hit)
         src = None
         is_youtube = self._domain(url) in ("youtube.com", "m.youtube.com") and "/watch" in url
         try:
             resp = None
-            if self.browser_mode == "always" and kind in ("user", "hub", "platform", "social") and (b := self.browser()):
+            if ((self.browser_mode == "always" or render) and kind in ("user", "hub", "platform", "social")
+                    and (b := self.browser())):
                 self._pace(url)
                 try:
                     resp = b.load(url)
@@ -749,9 +758,15 @@ class Researcher:
                     log(f"  i {url}: YouTube – only the title and description can be read. For what is said in the "
                         "video, paste a transcript (YouTube: … → Show transcript) into a .txt under Text sources.")
                 # Pages you chose are kept even if short (a social bio can be one line).
-                if len(text) > (0 if kind == "hub" else 60 if user_supplied else 400):
+                # Clip stores / social pages read for their markup (clip grids, embedded post data) are kept even
+                # with little prose: the caller parses the HTML, not the text.
+                markup_only = keep_html and len(resp.text) > 100 and (kind == "social" or (kind == "platform" and "<a" in resp.text))
+                if markup_only or len(text) > (0 if kind == "hub" else 60 if user_supplied else 400):
                     src = Source(url=url, title=title or page_title or url, text=text[: self.max_page_chars],
-                                 kind=kind, meta={"html": resp.text[:400_000]} if keep_html else {})
+                                 kind=kind, meta={"html": resp.text[:2_000_000 if kind in ("platform", "social")
+                                                                   else 400_000]} if keep_html else {})
+                    if type(resp).__name__ == "BrowserPage":
+                        src.meta["rendered"] = True
                 else:
                     self._skip(url, "almost no readable text (login wall or JS-only) – " + BLOCKED_TIP)
                     log(f"  ! {label}: almost no readable text (login wall or JS-only page) – {BLOCKED_TIP}")
