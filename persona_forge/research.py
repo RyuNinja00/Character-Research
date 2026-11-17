@@ -173,6 +173,7 @@ ADULT_PLATFORMS: dict[str, str] = {
     "camsoda.com": "",
     "bongacams.com": "",
     "fanvue.com": "",
+    "xhamster.com": "creators",    # creator / verified channel pages only, not video pages
 }
 # Multi-user platforms: their other pages belong to other people, so sub-page following never runs on them.
 NO_SUBPAGE_DOMAINS = (LOGIN_WALLED_DOMAINS | LINK_HUB_DOMAINS | set(ADULT_PLATFORMS) |
@@ -560,7 +561,7 @@ class Researcher:
     def _needs_browser(self, resp, kind: str) -> bool:
         """Use the real browser for pages you chose (and the creator's own channels) when the fast reader
         didn't get the page: refused, a human check, an unanswered age page, or a JS-only page with no text."""
-        if self.browser_mode == "off" or kind not in ("user", "hub", "platform"):
+        if self.browser_mode == "off" or kind not in ("user", "hub", "platform", "social"):
             return False
         gate = getattr(resp, "age_gate", "")
         if gate in ("strict", "off"):
@@ -684,7 +685,7 @@ class Researcher:
     def fetch(self, url: str, title: str = "", kind: str = "web", keep_html: bool = False,
               via: str = "") -> Source | None:
         url = normalize_url(url)
-        user_supplied = kind in ("user", "hub", "platform")
+        user_supplied = kind in ("user", "hub", "platform", "social")
         keep_html = keep_html or kind == "hub"
         label = f"{url} (sub-page of {via})" if via else url
         if not self.allowed_url(url, user_supplied=user_supplied):
@@ -703,7 +704,7 @@ class Researcher:
         is_youtube = self._domain(url) in ("youtube.com", "m.youtube.com") and "/watch" in url
         try:
             resp = None
-            if self.browser_mode == "always" and kind in ("user", "hub", "platform") and (b := self.browser()):
+            if self.browser_mode == "always" and kind in ("user", "hub", "platform", "social") and (b := self.browser()):
                 self._pace(url)
                 try:
                     resp = b.load(url)
@@ -796,6 +797,8 @@ class Researcher:
         path = urlparse(url).path.lower()
         if plat == "pornhub.com" and not re.match(r"^/(model|pornstar|channels)/", path):
             return False  # video pages are often reuploads by others
+        if plat == "xhamster.com" and not re.match(r"^/(creators|channels|users)/", path):
+            return False
         return any(h and re.search(rf"(^|[/_.-]){re.escape(h)}($|[/_.?-])", path) for h in handles)
 
     def adult_platform_sweep(self, name: str, handles: list[str], seen: set[str], max_pages: int = 12) -> list[Source]:
@@ -828,6 +831,28 @@ class Researcher:
         if picked:
             log(f"→ Adult-platform profiles found: {len(picked)}")
         return self.fetch_many(picked[:max_pages], kind="platform")
+
+    def clip_catalogs(self, urls: Iterable[str], handles: list[str], max_pages: int = 3, max_details: int = 20,
+                      max_stores: int = 8) -> list:
+        """Clip catalogues (titles, tags, descriptions) for every one of the creator's OWN stores among `urls`."""
+        from .clips import platform_of, read_store
+
+        stores: list[str] = []
+        for u in urls:
+            u = normalize_url(u).split("#")[0].rstrip("/")
+            if platform_of(u) and self.is_creator_profile(u, handles) and u not in stores:
+                stores.append(u)
+        if not stores:
+            return []
+        log(f"→ Reading clip catalogues on {len(stores[:max_stores])} of the creator's own store(s)…")
+        out = []
+        for u in stores[:max_stores]:
+            try:
+                if cat := read_store(self, u, max_pages=max_pages, max_details=max_details):
+                    out.append(cat)
+            except Exception as e:  # noqa: BLE001 – one odd store must not end the run
+                log(f"  ! clip catalogue for {u} failed: {e.__class__.__name__}: {str(e)[:120]}")
+        return out
 
     # ───────────────────────────────────────────── Sub-pages of the creator's own sites
     def follow_site_pages(self, pages: list[Source], per_site: int = 5, from_hub: bool = False) -> list[Source]:

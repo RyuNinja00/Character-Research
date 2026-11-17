@@ -525,6 +525,74 @@ different greetings or wording.
 **Add more research** by running the full command again with extra `--url`/`--file` sources. Pages already read
 come from the cache, so you only pay for what's new.
 
+## 8b. Confirm or correct, the editing assistant and the refined copy
+
+### Confirm or correct (instead of a creator questionnaire)
+
+Every creator-mode build writes `confirm_sheet.json` and a printable `confirm_sheet.md`. It turns everything the
+app guessed into one-click questions:
+
+- **Keep / Drop / Change…** for each personality trait, speech habit, quote, flirting style, dynamic, kink and limit.
+- **Signature / Frequent / Occasional / Drop it** for each content theme, with the clip counts as evidence, plus
+  frequent clip tags the persona doesn't mention yet.
+- **Best guesses** for gaps the research couldn't fill. Nothing from a gap reaches the card until someone picks
+  an answer or writes their own.
+- **New hard limits**, one per line. They are added to the card's boundaries word for word.
+
+In the web UI, open **9 · Confirm or correct**, answer what you can, and press **Apply answers & rebuild**. The
+answers are written into `dossier.json` (the original is kept as `dossier.before_confirm.json`) and the card is
+rewritten, with no new searching. Unanswered lines change nothing. A later full build keeps answers to questions
+that are still the same. From the command line:
+
+```bash
+python -m persona_forge --from-dossier output/Ivy_Wren/dossier.json --confirm-sheet output/Ivy_Wren/confirm_sheet.json
+```
+
+### The editing assistant
+
+**10 · Editing assistant** in the web UI is a chat about the finished card:
+
+- **Suggest**: the AI reviews the card (voice, personality, flirting, greetings, onboarding, size, flagged
+  passages, unanswered confirm questions) and explains what it would change. Each suggestion has a **Do this**
+  button.
+- **Ask in plain words**, e.g. “make her greetings shorter and more teasing” or “add a greeting set after a stream”.
+  The AI answers and shows each change as before/after (green = added, red = removed).
+- **Apply** saves a new version (`Ivy_Wren_v1.1.png`, `_v1.2`…). Nothing is overwritten. Pick an older version
+  from **Card being edited** to go back to it.
+
+The creator's hard boundaries and the consent line can't be removed, and an edit that would add an excluded theme
+is refused with a note.
+
+### Card token budget and the refined copy
+
+Set **Card token budget** (section 4) or `--card-budget 1200`. Each build then writes two cards:
+
+- `Ivy_Wren.png`: the raw card, uncondensed. Only edits you choose ever change it.
+- `Ivy_Wren_refined.png`: a copy condensed to fit the budget, plus `refined_report.md` showing the tokens per
+  field before and after. Hard boundaries are kept word for word. Details that had to go are moved into
+  lorebook entries, so they come back when the chat mentions them.
+
+“Tokens” here means the permanent text Marinara sends with every reply (description, personality, scenario,
+appearance, backstory, rules, example chats). Greetings and the lorebook are listed separately. The refined
+copy keeps the same character name, because Marinara's `{{char}}` is the name. It's marked “refined” in its file
+name, library blurb, version and tags.
+
+After editing, press **Make refined copy** in the editing assistant (the panel says when the copy is out of
+date). For any card file, from the command line:
+
+```bash
+python -m persona_forge --fit-budget output/Ivy_Wren/Ivy_Wren_v1.2.png --card-budget 1000
+```
+
+### Fan onboarding
+
+Creator and 18+ cards get Marinara **Interactive Onboarding**: when a fan starts a Roleplay chat, the card asks a
+few playful questions in the character's voice and builds the fan's persona from the answers. It asks what to
+call them, how they know each other, the pace, who leads, and what they're into. The “into” options come only
+from the persona's own content themes and kinks. The questions are in `onboarding.md`. Change them with the
+editing assistant (“make the onboarding questions flirtier”) or in Marinara's Character Editor → Onboarding tab.
+Turn them off with **No fan onboarding** / `--no-onboarding`.
+
 ---
 
 ## 9. Import into Marinara and set it up
@@ -741,6 +809,44 @@ Only the new material is read (no new web searching), so it's quick. The app the
 
 Read the report, test the new version in Marinara, and keep whichever you prefer. `--push` sends it to Marinara.
 
+## 10e. Clip stores and social profiles (creator mode)
+
+### Clip stores
+
+On 18+ creator cards, the app reads the creator's **own** clip stores and model pages: ManyVids, Clips4Sale,
+IWantClips, LoyalFans, FanCentro, JustFor.Fans, Fanvue, Pornhub/Modelhub model pages and xHamster creator pages.
+It finds them on the link hub, among your extra pages, or by searching their handles. A store counts as theirs
+only when its address contains one of their handles.
+
+For each store it reads the video list (up to `--clip-pages`, default 3), then opens up to `--clip-details`
+single clips (default 20) for descriptions and tags. It collects every clip's title, tags and description and
+counts the tags. The counts become content themes with evidence (“18 of 40 clips”), which drive the persona's
+kinks and the confirm sheet. Excluded themes are removed before anything is used.
+`clip_catalog.md` lists every clip and the tag table. Turn this off with **Read their clip stores** /
+`--no-clips`.
+
+Store layouts change. If a store reads 0 clips, open its video list in your browser, save the page (Ctrl+S →
+“Webpage, HTML only”) and add it under **Text sources**.
+
+### Social profiles
+
+In creator mode the app also looks for their public profiles on X, Instagram, TikTok, Threads, Twitch, Reddit,
+Bluesky, YouTube and Tumblr. It uses the link hub's links, a search for their name and handles, and
+`platform.com/<handle>` guesses. A profile is read only when it's **confirmed as theirs**: linked from their link
+hub, a search result that names them, or a profile whose bio names them or links their other accounts. A
+same-named stranger is skipped. `social_profiles.md` lists every profile found, whether it was read, and why.
+
+- Reddit, Bluesky, YouTube and Tumblr are read as public feeds, so their posts also shape the voice profile.
+- X, Instagram, TikTok, Threads and Twitch are read as public pages: the bio, plus whatever posts the page shows
+  without logging in. TikTok usually shows recent captions. X and Instagram usually show only the bio. The app
+  never logs in. The real-browser reader (**Page reader** → Smart or Always) gets more from these pages. Each
+  platform's terms limit automated collection. The app reads only what anyone can see without an account, at a
+  human pace. For full post histories, the creator's own data export (added as a text source) is still the best
+  source.
+
+Turn this off with **Find their public social profiles** / `--no-socials`, or keep only linked/searched
+profiles with `--no-social-guess`.
+
 ---
 
 ## 11. Every option, grouped
@@ -780,6 +886,18 @@ Run `python -m persona_forge --help` for the full list. These are the main optio
 | `--confirm-adult` / `--no-age-click` | Answer simple "Are you 18?" click-through pages (on by default with `--nsfw`), or never answer them. Real ID/face/card verification is never bypassed. |
 | `--boundaries F` | Hard limits, added word for word to the card's system prompt. |
 | `--audience-research` | A separate fan-perception report. Never used in the card. |
+| `--no-clips` / `--clip-pages N` / `--clip-details N` | Skip clip catalogues, or set how many store list pages (default 3) and single clips per store (default 20) are read. |
+| `--no-socials` / `--no-social-guess` | Skip social profiles, or use only ones linked from the hub or found by search. |
+
+**Confirm, onboarding, budget**
+
+| Option | Meaning |
+| --- | --- |
+| `--confirm-sheet F` | Apply the answers in a `confirm_sheet.json` to the dossier before writing the card. |
+| `--no-confirm-sheet` | Don't write the confirm sheet after research. |
+| `--no-onboarding` | Don't add Marinara fan onboarding questions. |
+| `--card-budget N` | Also write `<Name>_refined.png`, condensed to N permanent tokens. The raw card is unchanged. |
+| `--fit-budget CARD` | Make a refined copy of an existing card (with `--card-budget`). Nothing else runs. |
 
 **The character**
 
@@ -898,7 +1016,11 @@ Run `python -m persona_forge --help` for the full list. These are the main optio
 
 **It will:**
 
-- Read the creator's link hub, their own websites and their own profile and store pages on adult platforms.
+- Read the creator's link hub, their own websites and their own profile and store pages on adult platforms,
+  including clip titles, tags and descriptions on their own clip stores.
+- Read their public social profiles, once each one is confirmed as theirs.
+- Turn its guesses into a confirm-or-correct sheet, write playful fan onboarding, keep a raw card plus a refined
+  copy that fits a token budget, and let you edit the card in plain words with every version kept.
 - Extract personality, voice, inner life, backstory, tastes and content themes, and work out persona kinks from
   recurring themes in the creator's own posted content.
 - Keep researching until the profile is complete (`--deep`), and show you everything it found, used and

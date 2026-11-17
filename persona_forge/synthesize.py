@@ -59,11 +59,12 @@ class Options:
     max_facts_chars: int = 45_000      # per reduce call
     dropped_third_party_intimacy: int = 0  # intimacy facts discarded because they came from third-party sites
     dropped_excluded_themes: int = 0       # minor-coded / excluded themes discarded
+    clip_stats: str = ""                   # one line about the clip catalogues read (for review.md)
 
 
 # Source kinds that count as the creator's own channels (link hub, pages it links to, their own sites,
 # pages you chose with --url, creator briefs). Intimacy facts are accepted only from these.
-OWN_CHANNEL_KINDS = {"hub", "user", "brief", "platform", "feed"}
+OWN_CHANNEL_KINDS = {"hub", "user", "brief", "platform", "feed", "social"}
 ADULT_CATEGORIES = {"intimacy", "content_theme"}
 
 # Themes that are never put in a card, even when they appear in posted content: anything minor-coded,

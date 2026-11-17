@@ -120,6 +120,48 @@
   pre.log .e { color: #ff8a80; } pre.log .cmd { color: #c5a3ff; } pre.log .dim { color: #8a837a; }
   pre.log.problems-only > span:not(.w):not(.e) { display: none; }
   pre.log.problems-only { white-space: pre-line; }
+  /* confirm sheet */
+  .cq { border-top: 1px solid var(--line); padding: 10px 0; }
+  .cq .sec { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 14px 0 2px; }
+  .cq .p { font-size: 13px; color: var(--muted); }
+  .cq .g { font-weight: 600; margin: 2px 0 6px; }
+  .cq .ev { font-size: 12px; color: var(--muted); font-style: italic; }
+  .seg { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+  .seg button { border: 1px solid var(--line); background: var(--soft); color: var(--ink); border-radius: 6px; padding: 4px 10px;
+                font: inherit; font-size: 13px; cursor: pointer; }
+  .seg button.on { border-color: var(--accent); color: var(--accent); background: var(--panel); font-weight: 600; }
+  .cq input[type=text], .cq textarea { margin-top: 6px; }
+  .sheetbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+  .sheetbar .count { font-size: 13px; color: var(--muted); margin-right: auto; }
+  /* editing assistant */
+  .edtop { display: grid; grid-template-columns: 1fr 1fr; gap: 0 22px; }
+  @media (max-width: 700px) { .edtop { grid-template-columns: 1fr; } }
+  .meter { height: 8px; background: var(--soft); border: 1px solid var(--line); border-radius: 99px; overflow: hidden; margin: 6px 0 4px; }
+  .meter > div { height: 100%; background: var(--ok); }
+  .meter.over > div { background: var(--warn); }
+  .chat { border: 1px solid var(--line); border-radius: 8px; background: var(--soft); height: 460px; overflow: auto; padding: 10px; }
+  .chat.tall { height: 760px; }
+  .msg { margin: 8px 0; max-width: 92%; }
+  .msg .b { padding: 9px 12px; border-radius: 10px; white-space: pre-wrap; word-break: break-word; font-size: 14px; }
+  .msg.user { margin-left: auto; } .msg.user .b { background: var(--accent); color: var(--accent-ink); }
+  .msg.assistant .b { background: var(--panel); border: 1px solid var(--line); }
+  .msg.system .b { background: transparent; color: var(--muted); font-size: 12.5px; padding: 2px 4px; }
+  .msg .t { font-size: 11px; color: var(--muted); margin: 2px 4px; }
+  .msg ul { margin: 6px 0 0 0; padding-left: 18px; font-size: 13px; }
+  .sugg { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-top: 6px; background: var(--soft); }
+  .sugg b { display: block; font-size: 13.5px; } .sugg span { font-size: 12.5px; color: var(--muted); display: block; margin: 2px 0 6px; }
+  .diff { border: 1px solid var(--line); border-radius: 8px; margin-top: 8px; background: var(--panel); }
+  .diff h4 { margin: 0; padding: 6px 10px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+             border-bottom: 1px solid var(--line); }
+  .diff .txt { padding: 8px 10px; font-size: 13px; white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; }
+  .diff ins { background: color-mix(in srgb, var(--ok) 22%, transparent); text-decoration: none; }
+  .diff del { background: color-mix(in srgb, var(--bad) 18%, transparent); color: var(--muted); }
+  .prop-actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
+  .prop-actions .st { font-size: 12.5px; color: var(--muted); }
+  .warnline { color: var(--warn); font-size: 12.5px; margin-top: 4px; }
+  .composer { display: flex; gap: 8px; margin-top: 8px; align-items: flex-end; }
+  .composer textarea { min-height: 52px; }
+  .thinking { font-size: 13px; color: var(--warn); margin-top: 6px; min-height: 18px; }
 </style>
 </head>
 <body>
@@ -219,6 +261,12 @@
         <div class="check"><input type="checkbox" id="search_web" name="search_web"><div>
           <label for="search_web">Search the web for the name</label>
           <div class="hint">Interviews and podcasts. Already included in Deep research.</div></div></div>
+        <div class="check" data-modes="talent"><input type="checkbox" id="socials" name="socials" checked><div>
+          <label for="socials">Find their public social profiles</label>
+          <div class="hint">X, Instagram, TikTok, Threads, Twitch, Reddit, Bluesky, YouTube, Tumblr. Only profiles confirmed as theirs are read (linked from the link hub, or the profile names them). X and Instagram usually show only the bio without a login.</div></div></div>
+        <div class="check" data-modes="talent"><input type="checkbox" id="clips" name="clips" checked><div>
+          <label for="clips">Read their clip stores (18+ cards)</label>
+          <div class="hint">On their own ManyVids, Clips4Sale, IWantClips, Pornhub model page and similar: clip titles, tags and descriptions, counted into content themes. Saved as <code>clip_catalog.md</code>.</div></div></div>
         <div class="check" data-modes="talent"><input type="checkbox" id="audience_research" name="audience_research"><div>
           <label for="audience_research">Audience report</label>
           <div class="hint">A separate report on what fans say. Never used in the card.</div></div></div>
@@ -377,6 +425,14 @@
           <input type="text" id="language" name="language" placeholder="e.g. English">
           <div class="hint">The language the card is written in.</div>
         </div>
+        <div class="field">
+          <label for="card_budget">Card token budget</label>
+          <input type="number" id="card_budget" name="card_budget" placeholder="e.g. 1200 (empty = off)" min="0" max="32000">
+          <div class="hint">Also makes <code>&lt;Name&gt;_refined.png</code>, a copy condensed to this many tokens. The raw card is kept as is.</div>
+        </div>
+        <div class="check"><input type="checkbox" id="no_onboarding" name="no_onboarding"><div>
+          <label for="no_onboarding">No fan onboarding</label>
+          <div class="hint">By default the card gets playful questions a fan answers when a Marinara chat starts (name, how you met, pace, what they're into).</div></div></div>
         <div class="field">
           <label for="spec">JSON card format</label>
           <select id="spec" name="spec">
@@ -576,6 +632,59 @@
     </div>
   </section>
 
+  <!-- ─────────────────────────────── CONFIRM OR CORRECT -->
+  <section class="card" id="confirmCard">
+    <h2>9 · Confirm or correct</h2>
+    <div class="body">
+      <div class="hint" style="margin:6px 0 4px">No creator questionnaire? Every guess the app made becomes a one-click question: <b>Keep</b>, <b>Drop</b> or <b>Change</b>. Gaps get best-guess answers to pick from. Only answered lines change anything. Then <b>Apply answers &amp; rebuild</b> rewrites the card from the corrected research (fast, no searching). You can also send the printable checklist to the creator.</div>
+      <div class="sheetbar">
+        <span class="count" id="sheetCount">Build a card in creator mode to get the sheet.</span>
+        <a class="btn" id="sheetMd" target="_blank" style="text-decoration:none; display:none">Printable checklist</a>
+        <button type="button" class="btn" id="btnSheetSave" disabled>Save answers</button>
+        <button type="button" class="btn primary" id="btnSheetApply" disabled>Apply answers &amp; rebuild</button>
+      </div>
+      <div id="sheet"></div>
+    </div>
+  </section>
+
+  <!-- ─────────────────────────────── EDITING ASSISTANT -->
+  <section class="card" id="editorCard">
+    <h2>10 · Editing assistant</h2>
+    <div class="body">
+      <div class="hint" style="margin:6px 0 4px">Talk to the AI in plain words: ask for suggestions, or say what to change (“make her greetings shorter and more teasing”). You see every change as before/after and choose <b>Apply</b> or <b>Discard</b>. Each applied edit is saved as a new version, so you can always go back.</div>
+      <div class="edtop">
+        <div class="field">
+          <label for="edCard">Card being edited</label>
+          <select id="edCard"><option value="">Build a card first</option></select>
+          <div class="hint">Newest first. Pick an older version to go back to it.</div>
+        </div>
+        <div class="field">
+          <label>Size</label>
+          <div id="edTokens" class="hint" style="margin-top:0">–</div>
+          <div class="meter" id="edMeter"><div style="width:0"></div></div>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+            <input type="number" id="edBudget" placeholder="budget, e.g. 1200" min="300" max="32000" style="width:150px">
+            <button type="button" class="btn" id="btnRefit">Make refined copy</button>
+          </div>
+          <div class="hint" id="edRefined">The refined copy is condensed to the budget; the raw card stays as it is.</div>
+        </div>
+      </div>
+      <div class="chat" id="chat"></div>
+      <div class="thinking" id="thinking"></div>
+      <div class="composer">
+        <textarea id="edInput" placeholder="e.g. make her flirting more playful and less formal, and give me two new greetings set after a stream"></textarea>
+        <div style="display:flex; flex-direction:column; gap:6px">
+          <button type="button" class="btn primary" id="btnAsk">Send</button>
+          <button type="button" class="btn" id="btnSuggest" title="Have the AI review the card and suggest improvements">Suggest</button>
+        </div>
+      </div>
+      <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap">
+        <button type="button" class="tab" id="btnChatSize">Bigger chat</button>
+        <button type="button" class="tab" id="btnChatClear">Clear chat</button>
+      </div>
+    </div>
+  </section>
+
   <!-- ─────────────────────────────── ADVANCED -->
   <section class="card collapsed">
     <h2>7 · Advanced</h2>
@@ -624,6 +733,16 @@
             <option value="searxng">SearXNG (URL in .env)</option>
           </select>
           <div class="hint">Auto uses a paid key from .env if there is one.</div>
+        </div>
+        <div class="field">
+          <label for="clip_pages">Clip listing pages per store</label>
+          <input type="number" id="clip_pages" name="clip_pages" placeholder="default 3">
+          <div class="hint">Pages of a clip store's video list that are read.</div>
+        </div>
+        <div class="field">
+          <label for="clip_details">Clip pages per store</label>
+          <input type="number" id="clip_details" name="clip_details" placeholder="default 20">
+          <div class="hint">Single clips opened for their description and tags (0 = list only).</div>
         </div>
         <div class="field">
           <label for="audience_pages">Audience report pages</label>
@@ -790,6 +909,7 @@ function applyInfo(info) {
   renderFiles(info); renderOutputs(info.outputs);
   $("#btnRebuild").disabled = !info.has_dossier || !!job;
   $("#folder").textContent = "Folder: " + info.folder;
+  loadSheet(); loadEditor();
 }
 
 async function loadTalents(select) {
@@ -814,7 +934,7 @@ async function loadTalents(select) {
 $("#talentPicker").addEventListener("change", async e => {
   if (!e.target.value) { form.reset(); slug = ""; applyMode(); $("#brief").value = $("#limits").value = $("#urls").value = "";
     ["references","avatar","sprites","fullbody","sources","audio","card"].forEach(k => $("#files-" + k).innerHTML = ""); renderOutputs([]);
-    $("#folder").textContent = ""; $("#btnRebuild").disabled = true; return; }
+    $("#folder").textContent = ""; $("#btnRebuild").disabled = true; renderSheet(null); renderEditor(null); return; }
   const info = await api("/api/talent/" + e.target.value);
   fill({ name: info.settings.name, ...info.settings }); applyInfo(info); toast("Loaded " + (info.settings.name || info.slug));
 });
@@ -889,7 +1009,12 @@ const STAGES = [
   [/Research saved/, 74, "Research saved"],
   [/Audience research/, 76, "Audience report"],
   [/Writing character card/, 80, "Writing the card"],
-  [/Writing lorebook/, 88, "Writing the lorebook"],
+  [/Writing lorebook/, 86, "Writing the lorebook"],
+  [/Confirm sheet applied/, 72, "Applying the confirm-sheet answers"],
+  [/Reading clip catalogues/, 12, "Reading clip stores"],
+  [/Social profiles:/, 10, "Reading social profiles"],
+  [/Writing the fan onboarding/, 90, "Writing the fan onboarding"],
+  [/Refining the card to fit/, 93, "Making the refined copy"],
   [/Building sprite kit/, 94, "Building the sprite kit"],
   [/Importing into Marinara/, 97, "Sending to Marinara"],
   [/✓ .*written to/, 98, "Saving files"],
@@ -951,6 +1076,186 @@ $("#btnRun").addEventListener("click", () => start("run"));
 $("#btnRebuild").addEventListener("click", () => start("rebuild"));
 $("#btnRefine").addEventListener("click", () => { if (!$("#refine_card").value) { showErrors(["Pick or upload the card to refine in section 8."]); return; } start("refine"); });
 $("#btnCancel").addEventListener("click", async () => { if (job) await api(`/api/job/${job}/cancel`, { method: "POST" }); });
+
+// ─────────────────────────────── shared DOM helper (text only: AI output is never treated as HTML)
+function el(tag, attrs = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") e.className = v; else if (k === "text") e.textContent = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v); else if (v !== undefined && v !== null) e.setAttribute(k, v);
+  }
+  kids.flat().forEach(k => { if (k != null) e.append(k instanceof Node ? k : document.createTextNode(String(k))); });
+  return e;
+}
+const jpost = (path, body, method = "POST") => api(path, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+// ─────────────────────────────── 9 · Confirm or correct
+let sheet = null, answers = {};
+async function loadSheet() {
+  if (!slug) return renderSheet(null);
+  try { renderSheet(await api("/api/confirm/" + slug)); } catch (e) { renderSheet(null); }
+}
+function renderSheet(sh) {
+  sheet = sh && sh.items && sh.items.length ? sh : null; answers = {};
+  const box = $("#sheet"); box.innerHTML = "";
+  $("#btnSheetSave").disabled = $("#btnSheetApply").disabled = !sheet;
+  const md = $("#sheetMd");
+  if (!sheet) { $("#sheetCount").textContent = "Build a card in creator mode to get the sheet."; md.style.display = "none"; return; }
+  if (sheet.md) { md.href = `/files/${slug}/${sheet.md}`; md.style.display = ""; }
+  sheet.items.forEach(it => { if (it.answer) answers[it.id] = { ...it.answer,
+    custom: it.type === "choice" && it.answer.value && !it.options.includes(it.answer.value) }; });
+  let section = null;
+  sheet.items.forEach(it => {
+    if (it.section !== section) { section = it.section; box.append(el("div", { class: "cq sec", text: section })); }
+    box.append(renderQuestion(it));
+  });
+  updateSheetCount();
+}
+function updateSheetCount() {
+  if (!sheet) return;
+  const n = Object.values(answers).filter(a => a && a.action).length;
+  $("#sheetCount").textContent = `${n} of ${sheet.items.length} answered` + (sheet.applied ? ` · last applied ${sheet.applied}` : "");
+}
+function renderQuestion(it) {
+  const row = el("div", { class: "cq" });
+  row.append(el("div", { class: "p", text: it.prompt }));
+  if (it.type === "keep") row.append(el("div", { class: "g", text: it.guess }));
+  else if (it.type === "choice" && it.match !== "__gap__" && !it.match.startsWith("__new__:") && it.guess)
+    row.append(el("div", { class: "ev", text: "Now: " + it.guess }));
+  if (it.evidence) row.append(el("div", { class: "ev", text: "Evidence: " + it.evidence }));
+  const cur = () => answers[it.id] || {};
+  const seg = el("div", { class: "seg" });
+  const extra = el("div");
+  const set = (a) => { if (a) answers[it.id] = a; else delete answers[it.id]; paint(); updateSheetCount(); };
+  function paint() {
+    [...seg.children].forEach(b => b.classList.toggle("on", b.dataset.k === keyOf(cur())));
+    extra.innerHTML = "";
+    const a = cur();
+    if ((it.type === "keep" && a.action === "change") || (it.type === "choice" && a.custom)) {
+      const inp = el("input", { type: "text", value: a.value || (it.type === "keep" ? it.guess : ""), placeholder: "Type the correction" });
+      inp.addEventListener("input", () => { answers[it.id] = { ...cur(), value: inp.value }; });
+      extra.append(inp);
+    }
+  }
+  const keyOf = a => !a.action ? "" : it.type === "keep" ? a.action : a.custom ? "__own" : a.value;
+  if (it.type === "keep") {
+    for (const [k, label] of [["keep", "Keep"], ["drop", "Drop"], ["change", "Change…"]]) {
+      seg.append(el("button", { type: "button", "data-k": k, text: label, onclick: () =>
+        set(keyOf(cur()) === k ? null : { action: k, value: k === "change" ? it.guess : "" }) }));
+    }
+  } else if (it.type === "choice") {
+    it.options.forEach(o => seg.append(el("button", { type: "button", "data-k": o, text: o, onclick: () =>
+      set(keyOf(cur()) === o ? null : { action: "pick", value: o }) })));
+    if (it.match === "__gap__") seg.append(el("button", { type: "button", "data-k": "__own", text: "Write my own…", onclick: () =>
+      set(keyOf(cur()) === "__own" ? null : { action: "pick", value: "", custom: true }) }));
+  } else {
+    const ta = el("textarea", { placeholder: "One per line" }); ta.value = cur().value || "";
+    ta.addEventListener("input", () => { answers[it.id] = ta.value.trim() ? { action: "text", value: ta.value } : null; updateSheetCount(); });
+    row.append(ta); return row;
+  }
+  row.append(seg, extra); paint(); return row;
+}
+function answersPayload() {
+  const out = {}; (sheet ? sheet.items : []).forEach(it => { const a = answers[it.id]; out[it.id] = a && a.action ? { action: a.action, value: a.value || "" } : null; });
+  return out;
+}
+$("#btnSheetSave").addEventListener("click", async () => {
+  try { renderSheet(await jpost("/api/confirm/" + slug, { answers: answersPayload() }, "PUT")); toast("Answers saved"); }
+  catch (e) { showErrors(e.errors || [e.message]); }
+});
+$("#btnSheetApply").addEventListener("click", async () => {
+  if (job) { showErrors(["Wait for the current run to finish."]); return; }
+  showErrors([]);
+  let j; try { j = await jpost(`/api/confirm/${slug}/apply`, { answers: answersPayload(), form: collect() }); }
+  catch (e) { showErrors(e.errors || [e.message]); return; }
+  job = j.job; since = 0; $("#log").innerHTML = ""; renderOutputs([]); problems = 0; allText = [];
+  pct = 70; stageText = "Applying answers and rewriting the card"; setProgress("running");
+  $("#btnRun").disabled = $("#btnRebuild").disabled = $("#btnRefine").disabled = true; $("#btnCancel").disabled = false;
+  setStatus("running", "Applying the answers and rewriting the card…"); poll();
+});
+
+// ─────────────────────────────── 10 · Editing assistant
+let editor = null, edBusy = false;
+async function loadEditor() {
+  if (!slug) return renderEditor(null);
+  try { renderEditor(await api("/api/editor/" + slug)); } catch (e) { renderEditor(null); }
+}
+function renderEditor(info) {
+  editor = info;
+  const sel = $("#edCard"); sel.length = 0;
+  (info && info.versions || []).forEach(v => sel.add(new Option(`${v.name}  ·  ${v.time}`, v.path)));
+  if (!sel.length) sel.add(new Option("Build a card first", ""));
+  if (info && info.card) sel.value = info.card;
+  const t = info && info.tokens, budget = +($("#edBudget").value || (info && info.budget) || +$("#card_budget").value || 0);
+  if (info && info.budget && !$("#edBudget").value) $("#edBudget").value = info.budget;
+  if (t) {
+    $("#edTokens").textContent = `~${t.permanent} tokens sent with every reply` + (budget ? ` (budget ${budget})` : "")
+      + ` · longest greeting ~${t.greeting_longest} · lorebook ${t.lorebook_entries} entries`;
+    const m = $("#edMeter"); const ratio = budget ? t.permanent / budget : 0;
+    m.classList.toggle("over", ratio > 1); $("#edMeter > div").style.width = budget ? Math.min(100, ratio * 100) + "%" : "0";
+  } else { $("#edTokens").textContent = "–"; $("#edMeter > div").style.width = "0"; }
+  const r = info && info.refined, rf = $("#edRefined"); rf.innerHTML = "";
+  if (r) rf.append("Refined copy: ", el("a", { href: `/files/${slug}/${r.path}?download`, text: r.name }),
+                   ` · ~${r.tokens} tokens` + (r.from ? ` · made from ${r.from}` : ""),
+                   r.stale ? el("span", { class: "warnline", text: " · out of date: the card changed since" }) : "");
+  else rf.textContent = "The refined copy is condensed to the budget; the raw card stays as it is.";
+  renderChat(info ? info.messages : []);
+  ["#btnAsk", "#btnSuggest", "#btnRefit"].forEach(b => $(b).disabled = !info || !info.card || edBusy);
+}
+function diffNode(d) {
+  const txt = el("div", { class: "txt" });
+  d.ops.forEach(([op, t]) => txt.append(op === "=" ? document.createTextNode(t) : el(op === "+" ? "ins" : "del", { text: t })));
+  return el("div", { class: "diff" }, el("h4", { text: d.label }), txt);
+}
+function renderChat(messages) {
+  const box = $("#chat"), atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
+  box.innerHTML = "";
+  if (!messages.length) box.append(el("div", { class: "msg system" }, el("div", { class: "b",
+    text: "Ask for anything in plain words, or press “Suggest” to have the AI review the card and walk you through improvements." })));
+  messages.forEach(m => {
+    const b = el("div", { class: "b", text: m.text || "" });
+    const wrap = el("div", { class: "msg " + (m.role || "system") }, b);
+    if (m.summary && m.summary.length) b.append(el("ul", {}, m.summary.map(x => el("li", { text: x }))));
+    (m.warnings || []).forEach(w => b.append(el("div", { class: "warnline", text: "⚠ " + w })));
+    (m.suggestions || []).forEach(sg => b.append(el("div", { class: "sugg" }, el("b", { text: sg.title }), el("span", { text: sg.why }),
+      el("button", { type: "button", class: "btn", text: "Do this", onclick: () => ask(sg.instruction) }))));
+    if (m.diffs && m.diffs.length) {
+      m.diffs.forEach(d => b.append(diffNode(d)));
+      const acts = el("div", { class: "prop-actions" });
+      if (m.status === "proposed") acts.append(
+        el("button", { type: "button", class: "btn primary", text: "Apply (save new version)", onclick: () => edAction("apply", { proposal: m.proposal }) }),
+        el("button", { type: "button", class: "btn", text: "Discard", onclick: () => edAction("discard", { proposal: m.proposal }) }));
+      else acts.append(el("span", { class: "st", text: m.status === "applied" ? "✓ Applied" : "Discarded" }));
+      b.append(acts);
+    }
+    if (m.time) wrap.append(el("div", { class: "t", text: m.time }));
+    box.append(wrap);
+  });
+  if (atBottom || edBusy) box.scrollTop = box.scrollHeight;
+}
+async function edAction(action, body = {}, busyText = "") {
+  if (edBusy) return;
+  edBusy = true; $("#thinking").textContent = busyText; renderEditor(editor);
+  try { renderEditor(await jpost(`/api/editor/${slug}/${action}`, { ...body, form: collect() })); showErrors([]); }
+  catch (e) { showErrors(e.errors || [e.message]); }
+  finally { edBusy = false; $("#thinking").textContent = ""; renderEditor(editor); }
+}
+function ask(text) {
+  text = (text || "").trim(); if (!text || !editor || !editor.card) return;
+  editor.messages.push({ role: "user", text, time: "" }); renderChat(editor.messages); $("#edInput").value = "";
+  edAction("ask", { text }, "The AI is working on it… (usually 10–60 seconds)");
+}
+$("#btnAsk").addEventListener("click", () => ask($("#edInput").value));
+$("#edInput").addEventListener("keydown", e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) ask($("#edInput").value); });
+$("#btnSuggest").addEventListener("click", () => edAction("suggest", {}, "The AI is reviewing the card…"));
+$("#btnRefit").addEventListener("click", () => {
+  const b = +$("#edBudget").value; if (!b || b < 300) { showErrors(["Enter a token budget of at least 300 next to the button."]); return; }
+  edAction("refit", { budget: b }, `Condensing a copy to ${b} tokens…`);
+});
+$("#edCard").addEventListener("change", e => { if (e.target.value) edAction("use", { card: e.target.value }); });
+$("#edBudget").addEventListener("input", () => renderEditor(editor));
+$("#btnChatSize").addEventListener("click", () => { const c = $("#chat"); c.classList.toggle("tall"); $("#btnChatSize").textContent = c.classList.contains("tall") ? "Smaller chat" : "Bigger chat"; });
+$("#btnChatClear").addEventListener("click", () => { if (confirm("Clear the chat? Saved card versions are kept.")) edAction("clear"); });
 
 applyMode(); loadTalents();
 </script>

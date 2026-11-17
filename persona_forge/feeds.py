@@ -9,8 +9,9 @@ Supported (one per line in the web UI's "Public feeds" box, or --feed):
     rss: https://…            (Substack, blogs, any RSS/Atom feed; podcast feeds bring audio episodes)
     podcast: <search words>   (episodes they appeared on, via Apple's public podcast directory → transcribed)
 
-Not supported on purpose: X/Twitter, Instagram, TikTok, OnlyFans, Fansly – they offer no public feed and forbid
-automated collection; use their official data export instead (see the manual).
+X/Twitter, Instagram, TikTok, Threads and Twitch have no open feed: in creator mode, socials.py reads their PUBLIC
+profile pages instead (bio + whatever posts the page serves without a login), once the profile is confirmed as the
+creator's. Their official data export (added as a text source) is still the richest option.
 """
 
 from __future__ import annotations
