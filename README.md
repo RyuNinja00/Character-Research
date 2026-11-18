@@ -176,6 +176,35 @@ generation. The card sets these up:
 Buyers can generate more sprites inside Marinara with its own image model (**Sprites → Add sprites →
 Generate**). The card's image prompt keeps them on-model.
 
+#### Clip stores and social profiles
+
+- **Clip catalogues** (`--talent --nsfw`, on by default; `--no-clips` to skip): on the creator's own ManyVids,
+  Clips4Sale, IWantClips, LoyalFans, FanCentro, JustFor.Fans, Fanvue, Pornhub/Modelhub model and xHamster creator
+  pages, it reads the video list (`--clip-pages`, default 3) and single clips (`--clip-details`, default 20). Each
+  clip's title, tags and description are collected and the tags counted. The counts become content themes with
+  evidence, and `clip_catalog.md` lists every clip and tag. Excluded themes are removed first.
+- **Social profiles** (`--talent`, on by default; `--no-socials` to skip, `--no-social-guess` for no
+  `platform.com/<handle>` guesses): X, Instagram, TikTok, Threads, Twitch, Reddit, Bluesky, YouTube and Tumblr. A
+  profile is read only once it's confirmed as theirs: linked from their link hub, a search result that names them,
+  or a profile whose bio names them or links their other accounts. Feed platforms also feed the voice profile.
+  Page platforms give the bio plus whatever posts are public without a login. See `social_profiles.md`.
+
+#### Confirm or correct, fan onboarding, editing assistant, refined copy
+
+- **`confirm_sheet.json` / `.md`**: every guess becomes a Keep / Drop / Change question, with ranked content
+  themes and best-guess answers for gaps. Answer it in the web UI (section 9) and apply with
+  **Apply answers & rebuild**, or use `--from-dossier … --confirm-sheet confirm_sheet.json`. Limits typed there
+  become hard boundaries.
+- **Fan onboarding**: Marinara Interactive Onboarding (`extensions.onboarding`). These are playful questions a fan
+  answers when a chat starts (name, how you met, pace, who leads, what they're into, built from the persona's
+  themes). It is validated against Marinara's naming and macro rules. `--no-onboarding` to skip; see
+  `onboarding.md`.
+- **Editing assistant** (web UI, section 10): ask for suggestions or changes in plain words, see before/after,
+  and apply. Every edit is saved as a new version (`_v1.1`, `_v1.2`…), and boundaries and consent are always kept.
+- **Card token budget** (`--card-budget N`): keeps the raw card and writes `<Name>_refined.png`, a copy condensed
+  to fit N permanent tokens. Cut details move to the lorebook, and boundaries stay word for word. See
+  `refined_report.md`. For any card: `--fit-budget card.png --card-budget N`.
+
 #### Audience report (`--audience-research`)
 
 This writes a separate `audience_report.md`, built from public fan discussion of the stage name and handles:
@@ -229,6 +258,9 @@ Files go in `output/<Name>/`:
 | `<Name>.png` | The card image with the data inside. **Import this.** |
 | `<Name>.card.json` | The same card as JSON, V2 by default (`--spec v3` for V3). |
 | `<Name>.lorebook.json` | A standalone lorebook, in case you'd rather import and link it yourself. |
+| `<Name>_refined.png` | Only with a card token budget: the condensed copy. `refined_report.md` shows what changed. |
+| `confirm_sheet.md` | Creator mode: the confirm-or-correct checklist (answer it in the web UI, or send it to the creator). |
+| `clip_catalog.md`, `social_profiles.md`, `onboarding.md` | What was read from clip stores and socials, and the fan onboarding questions. |
 | `review.md` | **Start here.** Every page read and how many facts it gave, every link skipped and why, and every extracted fact grouped by category with its source. |
 | `dossier.json`, `facts.jsonl`, `sources.md` | The research, so you can check and edit it. |
 
@@ -283,4 +315,6 @@ portrayal built from public sources. Check the facts before you share a card of 
 
 ```bash
 python -m tests.test_offline   # fake LLM + fake Marinara, no network needed
+python -m tests.test_features  # clip catalogues, socials, confirm sheet, onboarding, budget, editing assistant
+python -m tests.test_webui
 ```

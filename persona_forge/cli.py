@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from urllib.parse import urlparse
@@ -167,6 +168,17 @@ def build_parser() -> argparse.ArgumentParser:
                         "is shown so you can complete “verify you're human” checks yourself; off = fast reader only")
     g.add_argument("--no-age-click", action="store_true",
                    help="Never answer “Are you 18?” pages, even with --nsfw")
+    g.add_argument("--no-socials", action="store_true",
+                   help="Creator mode: don't look for the creator's public social profiles (X, Instagram, TikTok, Reddit, "
+                        "Bluesky, YouTube, Twitch, Tumblr, Threads)")
+    g.add_argument("--no-social-guess", action="store_true",
+                   help="Only use social profiles linked from the link hub or found by search; don't try platform.com/<handle>")
+    g.add_argument("--no-clips", action="store_true",
+                   help="Don't read clip catalogues (titles, tags, descriptions) on the creator's own clip stores")
+    g.add_argument("--clip-pages", type=int, default=3,
+                   help="Listing pages read per clip store / model page (default 3)")
+    g.add_argument("--clip-details", type=int, default=20,
+                   help="Individual clip pages read per store for descriptions and tags (default 20; 0 = listings only)")
     g.add_argument("--audience-research", action="store_true",
                    help="Also write a separate audience_report.md: what fans/the public say about the creator's content "
                         "(themes, praise, requests, criticism) found under the stage name and handles. Never used in the card.")
@@ -205,15 +217,26 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Use the first reference image as the card avatar (so 'use current avatar as reference' works)")
     g.add_argument("--sprite-expressions", type=int, default=12, help="How many expressions the kit plans (max 16)")
     g.add_argument("--sprite-poses", type=int, default=6, help="How many full-body poses the kit plans (max 16)")
+    g.add_argument("--no-onboarding", action="store_true",
+                   help="Don't write Marinara Interactive Onboarding (the playful questions a fan answers when a chat starts)")
     g.add_argument("--no-image-prompt", action="store_true",
                    help="Don't set Marinara's image-generation appearance (imageAppearance)")
 
     g = p.add_argument_group("output")
     g.add_argument("--out", default="output", help="Output folder (default ./output)")
     g.add_argument("--spec", choices=["v2", "v3"], default="v2", help="JSON card spec (PNG always carries both)")
+    g.add_argument("--card-budget", type=int, default=0, metavar="TOKENS",
+                   help="Also write <Name>_refined.png: a copy of the card condensed to fit this many permanent tokens "
+                        "(the raw card is kept as is). 0 = off")
+    g.add_argument("--fit-budget", metavar="CARD",
+                   help="Make a refined copy of an existing card (.png/.json) that fits --card-budget; nothing else runs")
     g.add_argument("--merge-fields", action="store_true",
                    help="Fold Appearance/Backstory into Description (for SillyTavern; Marinara has separate fields)")
     g.add_argument("--from-dossier", help="Skip research: rebuild card + lorebook from a saved dossier.json")
+    g.add_argument("--confirm-sheet", metavar="JSON",
+                   help="Apply the answers in a confirm_sheet.json (keep/drop/change) to the dossier before writing the card")
+    g.add_argument("--no-confirm-sheet", action="store_true",
+                   help="Creator mode: don't write confirm_sheet.json / confirm_sheet.md after research")
     g.add_argument("--cache-dir", default=env("PERSONA_FORGE_CACHE", ".persona_forge_cache"))
     g.add_argument("--no-cache", action="store_true")
     g.add_argument("--verbose", "-v", action="store_true")
@@ -324,10 +347,14 @@ def collect_feeds(r: Researcher, args, name: str, audio) -> list[Source]:
     for line in lines:
         spec = parse_feed_line(line)
         if spec is None and line.strip() and not line.strip().startswith("#"):
-            log(f"  ! feed “{line.strip()}” not recognised (X/Instagram/TikTok/OnlyFans have no public feed – use their "
-                "data export instead)")
+            log(f"  ! feed “{line.strip()}” not recognised (X/Instagram/TikTok/OnlyFans have no public feed – add the profile "
+                "as an extra page, or their data export as a text source)")
         elif spec and spec not in specs:
             specs.append(spec)
+    social = [sp for sp in getattr(args, "_social_feeds", []) if sp not in specs]
+    if social:
+        log("→ Feeds from their confirmed social profiles: " + ", ".join(sp.label() for sp in social))
+        specs += social
     if not args.no_auto_feeds:
         auto = [sp for sp in specs_from_links(r.hub_links) if sp not in specs]
         if auto:
@@ -437,6 +464,29 @@ def gather_sources(r: Researcher, args) -> tuple[list[Source], str, str]:
         plat = r.adult_platform_sweep(name, args.handles, {s.url.split("#")[0].rstrip("/") for s in sources},
                                       max_pages=args.max_pages)
         sources.extend(plat)
+        # Clip catalogues: titles, tags and descriptions on the creator's own clip stores and model pages
+        # (found by the sweep, on the link hub, or added as pages).
+        if not args.no_clips:
+            from .clips import catalog_source
+
+            cands = [s.url for s in sources] + list(r.hub_links) + list(args.url)
+            cats = r.clip_catalogs(cands, args.handles, max_pages=args.clip_pages, max_details=args.clip_details)
+            args._clip_catalogs = cats
+            if cats:  # the catalogue replaces the bare store page it was read from
+                store_urls = {c.store_url.split("#")[0].rstrip("/") for c in cats}
+                sources = [s for s in sources if s.url.split("#")[0].rstrip("/") not in store_urls]
+                sources.extend(catalog_source(c, name) for c in cats)
+    # Their own public social profiles (creator mode): confirmed as theirs before anything is read.
+    if args.talent and not args.no_web and not args.no_socials and not getattr(args, "_refine", False):
+        from .socials import discover, feed_specs, read_pages
+
+        profiles = discover(r, name, args.handles, r.hub_links, hub_urls=args.seed, guess=not args.no_social_guess)
+        args._socials = profiles
+        args._social_feeds = feed_specs(profiles)
+        sources.extend(read_pages(r, profiles, name))
+        posts = [p for prof in profiles for p in prof.posts]
+        if posts:
+            args._voice_messages = getattr(args, "_voice_messages", []) + posts
     # Public feeds: the person's own posts (typed in, plus feeds found among the link hub's links)
     sources.extend(collect_feeds(r, args, name, audio))
 
@@ -513,6 +563,8 @@ def _coverage_section(opts: Options, gap_report) -> list[str]:
         lines.append("Persona kinks are extrapolated from recurring themes in the creator's own posted content "
                      "(profiles and storefronts on adult platforms, their link hub and sites) and marked "
                      "'(from posted content)'. They describe the persona's content themes, not the person's private life.")
+        if opts.clip_stats:
+            lines.append(opts.clip_stats)
         if opts.dropped_third_party_intimacy:
             lines.append(f"{opts.dropped_third_party_intimacy} such claims from third-party sites were discarded.")
         if opts.dropped_excluded_themes:
@@ -542,7 +594,7 @@ def write_review(opts: Options, facts, sources: list[Source], used: list[Source]
     lines += ["## Sources read", "", "| Facts | Type | Source |", "| ---: | --- | --- |"]
     for s in sorted(sources, key=lambda s: -by_src.get(s.url, 0)):
         kind = {"brief": "creator brief", "platform": "adult-platform profile (own)", "hub": "link hub",
-                "user": "creator's page / your URL"}.get(s.kind, s.kind)
+                "user": "creator's page / your URL", "social": "their social profile (confirmed)"}.get(s.kind, s.kind)
         mark = by_src.get(s.url, 0) if s.url in used_urls else "0 (not about them)"
         lines.append(f"| {mark} | {kind} | [{(s.title or s.url)[:70]}]({s.url}) |")
     if skipped:
@@ -570,7 +622,8 @@ def write_review(opts: Options, facts, sources: list[Source], used: list[Source]
 # Saved next to dossier.json so --from-dossier rebuilds with the same mode, voice and safety settings
 # without retyping them. Anything given explicitly on the command line wins.
 RUN_SETTINGS = ["talent", "nsfw", "consent_note", "descriptor", "era", "scenario", "style", "pov", "greetings",
-                "lore_entries", "language", "creator", "handle", "merge_fields", "spec", "scan_depth", "token_budget"]
+                "lore_entries", "language", "creator", "handle", "merge_fields", "spec", "scan_depth", "token_budget",
+                "card_budget"]
 
 
 def save_run_settings(out: Path, args, boundaries: str) -> None:
@@ -593,6 +646,47 @@ def apply_saved_settings(args, parser: argparse.ArgumentParser) -> str:
     if applied:
         log(f"→ Reusing settings from the original run: {', '.join(applied)}")
     return saved.get("boundaries_text", "")
+
+
+def write_confirm_sheet(out: Path, dossier: dict, opts, gap_report, catalogs, llm) -> None:
+    """confirm_sheet.json (answered in the web UI) + confirm_sheet.md (printable for the creator)."""
+    from .confirm import build_sheet, render_md
+
+    gaps = []
+    if gap_report:
+        cov = gap_report[0]
+        gaps = [label for label, ok, _ in cov.table if not ok]
+    try:
+        sheet = build_sheet(dossier, nsfw=opts.nsfw, catalogs=catalogs, gaps=gaps, llm=llm, name=opts.name)
+    except Exception as e:  # noqa: BLE001 – never lose a run over the sheet
+        log(f"  ! confirm sheet not written: {e}")
+        return
+    old_path = out / "confirm_sheet.json"
+    if old_path.exists():  # a re-run keeps answers to questions that are still the same
+        try:
+            old = {(i["section"], i["prompt"], i.get("guess", "")): i.get("answer")
+                   for i in json.loads(old_path.read_text("utf-8")).get("items", [])}
+            for it in sheet["items"]:
+                it["answer"] = old.get((it["section"], it["prompt"], it.get("guess", ""))) or None
+        except (ValueError, KeyError, OSError):
+            pass
+    old_path.write_text(json.dumps(sheet, ensure_ascii=False, indent=1), "utf-8")
+    (out / "confirm_sheet.md").write_text(render_md(sheet), "utf-8")
+    log(f"→ Confirm-or-correct sheet: {len(sheet['items'])} questions (confirm_sheet.md) – answer them in the web UI "
+        "or send the .md to the creator, then rebuild")
+
+
+def save_clip_catalogs(out: Path, name: str, catalogs) -> None:
+    """clip_catalog.json (for the confirm sheet and rebuilds) and clip_catalog.md (for people)."""
+    if not catalogs:
+        return
+    from .clips import render_catalog_md
+
+    (out / "clip_catalog.json").write_text(json.dumps([c.to_json() for c in catalogs], ensure_ascii=False, indent=1),
+                                           "utf-8")
+    (out / "clip_catalog.md").write_text(render_catalog_md(name, catalogs), "utf-8")
+    log(f"→ Clip catalogue saved: {sum(len(c.clips) for c in catalogs)} clips from {len(catalogs)} store(s) "
+        "(clip_catalog.md)")
 
 
 def card_sources(urls: list[str], talent: bool) -> list[str]:
@@ -629,6 +723,42 @@ def save_research(out: Path, slug: str, opts, dossier: dict, facts, source_urls:
     )
 
 
+# ─────────────────────────────────────────────────────────────── card token budget
+def make_refined_copy(llm, card: dict, budget: int, out: Path, stem: str, image: bytes | None, *, nsfw: bool,
+                      spec: str = "v2", raw_name: str = "") -> Path:
+    """<stem>_refined.png/.card.json + refined_report.md; the raw card is left as it is."""
+    from .budget import fit_to_budget, render_report
+    from .marinara import save_card_files
+
+    raw_name = raw_name or f"{stem}.png"
+    data, report = fit_to_budget(llm, card, budget, nsfw=nsfw, source_name=raw_name)
+    png = save_card_files(out, f"{stem}_refined", data, image, spec=spec)
+    (out / "refined_report.md").write_text(render_report(data.get("name", stem), report, raw_name, png.name), "utf-8")
+    log(f"   {png.name}  ← refined copy: ~{report['after']['permanent']} tokens (was ~{report['before']['permanent']}, "
+        f"budget {report['budget']}){'' if report['within'] else ' – still over budget, see refined_report.md'}")
+    return png
+
+
+def run_fit_budget(args) -> int:
+    from .refine import load_card
+
+    if not args.card_budget:
+        raise SystemExit("--fit-budget needs --card-budget TOKENS, e.g. --card-budget 1200")
+    path = Path(args.fit_budget)
+    if not path.exists():
+        raise SystemExit(f"Card not found: {path}")
+    card, image = load_card(path)
+    data = card.get("data", card)
+    cache = None if args.no_cache else DiskCache(Path(args.cache_dir))
+    llm = LLMClient(LLMConfig(args.base_url, args.api_key, args.model, max_tokens=args.max_tokens, json_mode=args.json_mode,
+                              thinking=args.thinking), cache)
+    stem = re.sub(r"(_v\d+(\.\d+)*)?(_refined)?(\.card)?$", "", path.stem)
+    nsfw = args.nsfw or "nsfw" in [str(t).lower() for t in data.get("tags") or []]
+    make_refined_copy(llm, card, args.card_budget, path.parent, stem, image, nsfw=nsfw, spec=args.spec,
+                      raw_name=path.name)
+    return 0
+
+
 # ─────────────────────────────────────────────────────────────── main
 def main(argv: list[str] | None = None) -> int:
     load_dotenv(Path.cwd() / ".env")
@@ -642,6 +772,8 @@ def main(argv: list[str] | None = None) -> int:
         from .refine import run_refine
 
         return run_refine(args, parser)
+    if args.fit_budget:
+        return run_fit_budget(args)
     saved_boundaries = apply_saved_settings(args, parser) if args.from_dossier else ""
     if not args.api_key and "localhost" not in args.base_url and "127.0.0.1" not in args.base_url:
         log("! No API key set (LLM_API_KEY / --api-key). Local servers usually don't need one.")
@@ -722,6 +854,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         sources, opts.name, desc = gather_sources(r, args)
         opts.descriptor = desc or opts.descriptor
+        if cats := getattr(args, "_clip_catalogs", None):
+            opts.clip_stats = (f"Clip catalogues: {sum(len(c.clips) for c in cats)} clips from "
+                               + ", ".join(f"{c.platform} ({len(c.clips)})" for c in cats)
+                               + " – titles, tags and descriptions in `clip_catalog.md`. "
+                               + (f"{sum(c.dropped_excluded for c in cats)} excluded clip(s)/tag(s) were removed."
+                                  if any(c.dropped_excluded for c in cats) else ""))
         if not sources:
             raise SystemExit("No usable sources found.")
         # Use the cheap model for the map step, then the main model for everything else.
@@ -759,8 +897,15 @@ def main(argv: list[str] | None = None) -> int:
         save_research(out_early, slugify(opts.name), opts, dossier, facts, source_urls,
                       getattr(getattr(args, "_audio", None), "transcripts", None))
         save_run_settings(out_early, args, boundaries)
+        save_clip_catalogs(out_early, opts.name, getattr(args, "_clip_catalogs", None))
+        if getattr(args, "_socials", None):
+            from .socials import render_md
+
+            (out_early / "social_profiles.md").write_text(render_md(opts.name, args._socials), "utf-8")
         (out_early / "review.md").write_text(write_review(opts, facts, *review_inputs, gap_report=gap_report), "utf-8")
         log(f"→ Research saved to {out_early}/ (dossier.json, review.md)")
+        if args.talent and not args.no_confirm_sheet and not args.confirm_sheet:
+            write_confirm_sheet(out_early, dossier, opts, gap_report, getattr(args, "_clip_catalogs", None), main_llm)
         if len(facts) < 8:
             raise SystemExit(f"Only {len(facts)} facts found about {opts.name} – see {out_early}/review.md for what was "
                              "read and skipped. Add pages with --url, a brief with --file, or try --deep.")
@@ -770,6 +915,27 @@ def main(argv: list[str] | None = None) -> int:
                 r, extract_llm, main_llm, opts, args.handles, max_pages=args.audience_pages,
                 seen_urls={u for u, _ in r.skipped},
             )
+    if args.confirm_sheet:
+        from .confirm import apply_sheet
+
+        sheet_path = Path(args.confirm_sheet)
+        sheet = json.loads(sheet_path.read_text("utf-8"))
+        stats = apply_sheet(dossier, sheet)
+        sheet_path.write_text(json.dumps(sheet, ensure_ascii=False, indent=1), "utf-8")
+        log("→ Confirm sheet applied: " + ", ".join(f"{v} {k}" for k, v in stats.items() if v))
+        dpath = Path(args.from_dossier) if args.from_dossier else Path(args.out) / slugify(opts.name) / "dossier.json"
+        if dpath.exists():
+            backup = dpath.with_name("dossier.before_confirm.json")
+            if not backup.exists():
+                backup.write_text(dpath.read_text("utf-8"), "utf-8")
+        dpath.parent.mkdir(parents=True, exist_ok=True)
+        dpath.write_text(json.dumps(dossier, ensure_ascii=False, indent=2), "utf-8")
+    from .confirm import merge_limits
+
+    merged = merge_limits(boundaries, dossier)
+    if merged != boundaries:
+        log("→ Adding the limits confirmed on the confirm sheet to the card's hard boundaries")
+        boundaries = opts.boundaries = merged
     try:
         card = write_card(main_llm, dossier, opts)
         lore = write_lorebook(main_llm, dossier, opts)
@@ -788,12 +954,21 @@ def main(argv: list[str] | None = None) -> int:
     image_appearance = "" if args.no_image_prompt else clean_image_appearance(
         str(card.get("image_appearance", "")), fallback=str(card.get("appearance", ""))[:600])
     sprites = load_sprites(args.sprites) if args.sprites else None
+    onboarding = None
+    if (args.talent or args.nsfw) and not args.no_onboarding:
+        from .onboarding import generate as gen_onboarding, render_md as onboarding_md
+
+        log("→ Writing the fan onboarding (Marinara Interactive Onboarding)…")
+        onboarding = gen_onboarding(main_llm, dossier, card, opts.name, opts.nsfw)
+        (out / "onboarding.json").write_text(json.dumps(onboarding, ensure_ascii=False, indent=1), "utf-8")
+        (out / "onboarding.md").write_text(onboarding_md(onboarding, opts.name), "utf-8")
+        log(f"   {len(onboarding['variables'])} onboarding questions (onboarding.md)")
 
     card_v2 = build_card(
         opts.name, card, dossier, lore, creator=args.creator, sources=card_sources(source_urls, args.talent),
         scan_depth=args.scan_depth, token_budget=args.token_budget, merge_fields=args.merge_fields,
         boundaries=boundaries, consent_note=args.consent_note, nsfw=args.nsfw,
-        image_appearance=image_appearance, sprites=sprites,
+        image_appearance=image_appearance, sprites=sprites, onboarding=onboarding,
     )
     card_v3 = to_v3(card_v2, card_sources(source_urls, args.talent))
     lorebook = build_lorebook(
@@ -831,6 +1006,8 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(card_v3 if args.spec == "v3" else card_v2, ensure_ascii=False, indent=2), "utf-8"
     )
     (out / f"{slug}.lorebook.json").write_text(json.dumps(lorebook, ensure_ascii=False, indent=2), "utf-8")
+    if args.card_budget:
+        make_refined_copy(main_llm, card_v2, args.card_budget, out, slug, avatar, nsfw=opts.nsfw, spec=args.spec)
     if not args.from_dossier:
         save_research(out, slug, opts, dossier, facts, source_urls,
                       getattr(getattr(args, "_audio", None), "transcripts", None))

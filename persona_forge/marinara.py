@@ -166,6 +166,7 @@ def build_card(
     nsfw: bool = False,
     image_appearance: str = "",
     sprites: list[dict] | None = None,
+    onboarding: dict | None = None,
 ) -> dict:
     """Return the V2 envelope. `merge_fields` appends Appearance/Backstory to Description for apps
     (e.g. SillyTavern) that do not have those fields – same as Marinara's 'Compatible' export."""
@@ -194,10 +195,16 @@ def build_card(
         "nameColor": name_color,
         # Marinara: Illustrator, selfies and AI sprite generation draw from this instead of `appearance`.
         **({"imageAppearanceEnabled": True, "imageAppearance": image_appearance} if image_appearance else {}),
+        # Marinara: Interactive Onboarding – questions the player answers when a chat starts.
+        **({"onboarding": onboarding} if onboarding and onboarding.get("enabled") else {}),
         # Marinara: embedded sprites are restored on import (same shape as Marinara's own PNG export).
         **({"marinara": {"sprites": sprites}} if sprites else {}),
         "persona_forge": {"version": 1, "generated": int(time.time()), "sources": sources[:50],
-                          **({"consent_note": consent_note} if consent_note else {})},
+                          **({"consent_note": consent_note} if consent_note else {}),
+                          **({"confirmed_on": dossier["creator_confirmed"].get("answered_on", ""),
+                              "confirmed_answers": dossier["creator_confirmed"].get("answers", 0)}
+                             if isinstance(dossier.get("creator_confirmed"), dict)
+                             and dossier["creator_confirmed"].get("answered_on") else {})},
     }
 
     system_prompt = str(card.get("system_prompt", "")).strip()
@@ -234,6 +241,18 @@ def build_card(
         ),
     }
     return {"spec": "chara_card_v2", "spec_version": "2.0", "data": data}
+
+
+def save_card_files(out: Path, stem: str, data: dict, image: bytes | None, *, spec: str = "v2") -> Path:
+    """Write <stem>.png (V2 + V3 chunks) and <stem>.card.json for a card's `data`. Returns the PNG path."""
+    card_v2 = {"spec": "chara_card_v2", "spec_version": "2.0", "data": data}
+    card_v3 = to_v3(card_v2, list(data.get("source") or []))
+    out.mkdir(parents=True, exist_ok=True)
+    png = out / f"{stem}.png"
+    png.write_bytes(embed_card_in_png(image or placeholder_avatar(data.get("name", "?")), card_v2, card_v3))
+    (out / f"{stem}.card.json").write_text(json.dumps(card_v3 if spec == "v3" else card_v2, ensure_ascii=False, indent=2),
+                                          "utf-8")
+    return png
 
 
 def to_v3(card_v2: dict, sources: list[str]) -> dict:

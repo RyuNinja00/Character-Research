@@ -170,6 +170,8 @@ def talent_info(slug: str) -> dict:
         "files": {k: _files(d, sub, exts) for k, (sub, exts) in UPLOAD_KINDS.items()},
         "outputs": output_files(d),
         "has_dossier": bool(find_dossier(d)),
+        "has_confirm": bool(confirm_path(d)),
+        "has_card": bool(working_out_dir(d) and editor_cards(d)),
     }
 
 
@@ -319,7 +321,7 @@ def build_command(slug: str, form: dict, rebuild: bool = False, refine: str = ""
     for key, flag in (("nsfw", "--nsfw"), ("deep", "--deep"), ("search_web", "--search-web"),
                       ("no_web", "--no-web"), ("generate_avatar", "--generate-avatar"),
                       ("no_cache", "--no-cache"), ("verbose", "--verbose"), ("merge_fields", "--merge-fields"),
-                      ("no_image_prompt", "--no-image-prompt")):
+                      ("no_image_prompt", "--no-image-prompt"), ("no_onboarding", "--no-onboarding")):
         if _flag(form, key) and flag not in a:
             if rebuild and key in ("deep", "search_web", "no_web"):
                 continue
@@ -328,6 +330,11 @@ def build_command(slug: str, form: dict, rebuild: bool = False, refine: str = ""
         a.append("--confirm-adult" if form.get("confirm_adult", True) not in (False, "false", "0", 0, "") else "--no-age-click")
     if _flag(form, "audience_research") and mode == "talent" and not rebuild and not _flag(form, "no_web"):
         a.append("--audience-research")
+    if not rebuild and mode == "talent":  # on by default; the boxes switch them off
+        if form.get("socials", True) in (False, "false", "0", 0):
+            a.append("--no-socials")
+        if form.get("clips", True) in (False, "false", "0", 0):
+            a.append("--no-clips")
 
     # Page-reading model: an empty box means "same as Model" – a leftover LLM_EXTRACT_MODEL in .env is ignored.
     a.append("--extract-model=" + _s(form, "extract_model"))
@@ -356,11 +363,13 @@ def build_command(slug: str, form: dict, rebuild: bool = False, refine: str = ""
                               ("workers", "--workers", 1, 16), ("max_tokens", "--max-tokens", 512, 64_000),
                               ("sprite_expressions", "--sprite-expressions", 1, 16),
                               ("sprite_poses", "--sprite-poses", 1, 16), ("audience_pages", "--audience-pages", 1, 60),
-                              ("scan_depth", "--scan-depth", 1, 20), ("token_budget", "--token-budget", 256, 32_000)):
+                              ("scan_depth", "--scan-depth", 1, 20), ("token_budget", "--token-budget", 256, 32_000),
+                              ("card_budget", "--card-budget", 0, 32_000), ("clip_pages", "--clip-pages", 1, 20),
+                              ("clip_details", "--clip-details", 0, 200)):
         v = _int(form, key, notes, lo, hi)
         if v is not None:
             if rebuild and key in ("max_pages", "max_rounds", "pages_per_round", "site_pages", "seed_depth",
-                                   "seed_max_links", "audience_pages"):
+                                   "seed_max_links", "audience_pages", "clip_pages", "clip_details"):
                 continue
             a += [flag, v]
     tc = _s(form, "target_coverage").rstrip("%")
@@ -456,6 +465,258 @@ def env_defaults() -> dict:
         "transcribe_base_url": vals.get("TRANSCRIBE_BASE_URL", ""), "has_transcribe_key": bool(vals.get("TRANSCRIBE_API_KEY")),
         "local_whisper": _local_whisper(),
     }
+
+
+# ═══════════════════════════════════════════════════════════ editing assistant, confirm sheet, budget
+def working_out_dir(d: Path) -> Path | None:
+    dossier = find_dossier(d)
+    if dossier:
+        return dossier.parent
+    cands = sorted((d / "output").glob("*/*.png"), key=lambda p: p.stat().st_mtime, reverse=True) if (d / "output").exists() else []
+    return cands[0].parent if cands else None
+
+
+def confirm_path(d: Path) -> Path | None:
+    od = working_out_dir(d)
+    p = od / "confirm_sheet.json" if od else None
+    return p if p and p.exists() else None
+
+
+def editor_cards(d: Path) -> list[Path]:
+    from .editor import card_files
+
+    od = working_out_dir(d)
+    return card_files(od) if od else []
+
+
+def _editor_state_path(d: Path) -> Path:
+    (d / "editor").mkdir(parents=True, exist_ok=True)
+    return d / "editor" / "chat.json"
+
+
+def load_editor_state(d: Path) -> dict:
+    p = _editor_state_path(d)
+    try:
+        st = json.loads(p.read_text("utf-8")) if p.exists() else {}
+    except ValueError:
+        st = {}
+    st.setdefault("messages", [])
+    st.setdefault("proposals", {})
+    return st
+
+
+def save_editor_state(d: Path, st: dict) -> None:
+    st["messages"] = st["messages"][-200:]
+    _editor_state_path(d).write_text(json.dumps(st, ensure_ascii=False, indent=1), "utf-8")
+
+
+def working_card(d: Path, st: dict | None = None) -> Path | None:
+    st = st if st is not None else load_editor_state(d)
+    if st.get("card"):
+        p = (d / st["card"]).resolve()
+        if d.resolve() in p.parents and p.is_file():
+            return p
+    cards = editor_cards(d)
+    return cards[0] if cards else None
+
+
+def _load(path: Path) -> tuple[dict, bytes | None]:
+    from .refine import load_card
+
+    card, image = load_card(path)
+    return card.get("data", card), image
+
+
+def _is_nsfw(data: dict) -> bool:
+    return "nsfw" in [str(t).lower() for t in data.get("tags") or []]
+
+
+def llm_from_form(form: dict):
+    from .cli import load_dotenv
+    from .llm import LLMClient, LLMConfig
+
+    load_dotenv(ROOT / ".env")
+
+    def g(key: str, env: str, default: str = "") -> str:
+        return _s(form, key) or (os.environ.get(env) or "").strip() or default
+
+    try:
+        max_tokens = int(g("max_tokens", "LLM_MAX_TOKENS", "8192"))
+    except ValueError:
+        max_tokens = 8192
+    return LLMClient(LLMConfig(g("base_url", "LLM_BASE_URL", "https://api.openai.com/v1"),
+                               g("api_key", "LLM_API_KEY") or (os.environ.get("OPENAI_API_KEY") or ""),
+                               g("model", "LLM_MODEL", "gpt-4o-mini"), max_tokens=max_tokens,
+                               json_mode=g("json_mode", "LLM_JSON_MODE", "auto"), thinking=g("thinking", "LLM_THINKING", "auto")))
+
+
+def editor_info(slug: str) -> dict:
+    from .budget import card_tokens
+
+    d = talent_dir(slug)
+    st = load_editor_state(d)
+    card = working_card(d, st)
+    info: dict = {"slug": slug, "messages": st["messages"], "card": None, "versions": [], "tokens": None, "refined": None}
+    for p in editor_cards(d):
+        info["versions"].append({"path": str(p.relative_to(d)), "name": p.name,
+                                 "time": time.strftime("%Y-%m-%d %H:%M", time.localtime(p.stat().st_mtime))})
+    if card:
+        data, _ = _load(card)
+        info["card"] = str(card.relative_to(d))
+        info["card_name"] = card.name
+        info["tokens"] = card_tokens(data)
+        info["version"] = data.get("character_version", "")
+        stem = re.sub(r"(_v\d+(\.\d+)*)?$", "", card.stem)
+        ref = card.parent / f"{stem}_refined.png"
+        if ref.exists():
+            rdata, _ = _load(ref)
+            info["refined"] = {"path": str(ref.relative_to(d)), "name": ref.name, "tokens": card_tokens(rdata)["permanent"],
+                               "stale": ref.stat().st_mtime < card.stat().st_mtime,
+                               "from": ((rdata.get("extensions") or {}).get("persona_forge") or {}).get("refined", {}).get("from", "")}
+    try:
+        info["budget"] = int(json.loads((d / "settings.json").read_text("utf-8")).get("card_budget") or 0)
+    except (ValueError, OSError):
+        info["budget"] = 0
+    return info
+
+
+def _editor_extra(d: Path, data: dict) -> dict:
+    from .synthesize import flag_excluded
+
+    extra: dict = {}
+    view = {k: v for k, v in data.items() if isinstance(v, (str, list))}
+    hits = flag_excluded({k: v for k, v in view.items() if k != "character_book"}, [])
+    if hits:
+        extra["flagged"] = hits[:10]
+    cp = confirm_path(d)
+    if cp:
+        try:
+            sheet = json.loads(cp.read_text("utf-8"))
+            open_q = [it["prompt"] + (": " + it["guess"] if it.get("guess") else "") for it in sheet.get("items", [])
+                      if not it.get("answer")]
+            if open_q and not sheet.get("applied"):
+                extra["unanswered_questions"] = {"count": len(open_q), "first": open_q[:6]}
+        except (ValueError, OSError):
+            pass
+    return extra
+
+
+def editor_action(slug: str, action: str, body: dict) -> dict:
+    from . import editor as ed
+
+    d = talent_dir(slug)
+    st = load_editor_state(d)
+    form = body.get("form") or {}
+    now = time.strftime("%H:%M")
+    if action == "use":
+        p = (d / str(body.get("card") or "")).resolve()
+        if d.resolve() not in p.parents or not p.is_file():
+            raise ValueError("Pick a card version from the list.")
+        st["card"] = str(p.relative_to(d))
+        st["messages"].append({"role": "system", "text": f"Now editing {p.name}.", "time": now})
+        save_editor_state(d, st)
+        return editor_info(slug)
+    if action == "clear":
+        st["messages"], st["proposals"] = [], {}
+        save_editor_state(d, st)
+        return editor_info(slug)
+    card = working_card(d, st)
+    if not card:
+        raise ValueError("Build a card first – there's nothing to edit yet.")
+    data, image = _load(card)
+    nsfw = _is_nsfw(data)
+    if action == "suggest":
+        res = ed.suggest(llm_from_form(form), data, nsfw=nsfw, extra=_editor_extra(d, data))
+        st["messages"].append({"role": "assistant", "text": res["reply"], "suggestions": res["suggestions"], "time": now})
+    elif action == "ask":
+        text = str(body.get("text") or "").strip()
+        if not text:
+            raise ValueError("Type what you'd like to change.")
+        st["messages"].append({"role": "user", "text": text, "time": now})
+        res = ed.propose(llm_from_form(form), data, text, st["messages"][:-1], nsfw=nsfw, extra=_editor_extra(d, data))
+        msg = {"role": "assistant", "text": res["reply"], "summary": res["summary"], "warnings": res["warnings"],
+               "time": now}
+        if res["changes"]:
+            pid = uuid.uuid4().hex[:10]
+            st["proposals"][pid] = {"changes": res["changes"], "base": str(card.relative_to(d)), "request": text,
+                                    "summary": res["summary"]}
+            msg.update({"proposal": pid, "diffs": res["diffs"], "status": "proposed"})
+        st["messages"].append(msg)
+    elif action in ("apply", "discard"):
+        pid = str(body.get("proposal") or "")
+        prop = st["proposals"].get(pid)
+        if not prop:
+            raise ValueError("That proposal is no longer available.")
+        for m in st["messages"]:
+            if m.get("proposal") == pid:
+                m["status"] = "applied" if action == "apply" else "discarded"
+        if action == "apply":
+            base = (d / prop["base"]).resolve()
+            if base != card.resolve():  # someone switched versions since: apply onto the current one
+                prop["note"] = "applied to the current version"
+            new, changed, warnings = ed.apply_changes(data, prop["changes"], nsfw=nsfw)
+            spec = (json.loads((d / "settings.json").read_text("utf-8")).get("spec") or "v2") if (d / "settings.json").exists() else "v2"
+            png = ed.save_version(card.parent, new, image, note=prop["request"], fields=changed,
+                                  spec=spec if spec in ("v2", "v3") else "v2")
+            st["card"] = str(png.relative_to(d))
+            text = f"Saved as {png.name}. The previous version is still in the list if you want to go back."
+            ref = card.parent / (re.sub(r"(_v\d+(\.\d+)*)?$", "", card.stem) + "_refined.png")
+            if ref.exists():
+                text += " The refined copy is now out of date – press “Make refined copy” to update it."
+            st["messages"].append({"role": "system", "text": text, "warnings": warnings, "time": now})
+        st["proposals"].pop(pid, None)
+    elif action == "refit":
+        from .cli import make_refined_copy
+
+        try:
+            budget = int(body.get("budget") or 0)
+        except ValueError:
+            budget = 0
+        if budget < 300:
+            raise ValueError("Set a card token budget of at least 300.")
+        stem = re.sub(r"(_v\d+(\.\d+)*)?$", "", card.stem)
+        png = make_refined_copy(llm_from_form(form), {"data": data}, budget, card.parent, stem, image, nsfw=nsfw,
+                                raw_name=card.name)
+        settings = json.loads((d / "settings.json").read_text("utf-8")) if (d / "settings.json").exists() else {}
+        settings["card_budget"] = str(budget)
+        (d / "settings.json").write_text(json.dumps(settings, ensure_ascii=False, indent=2), "utf-8")
+        st["messages"].append({"role": "system", "text": f"Made {png.name} from {card.name} (budget {budget} tokens). "
+                               "See refined_report.md for what was condensed.", "time": now})
+    else:
+        raise ValueError("unknown action")
+    save_editor_state(d, st)
+    return editor_info(slug)
+
+
+def confirm_get(slug: str) -> dict:
+    d = talent_dir(slug)
+    p = confirm_path(d)
+    if not p:
+        return {"items": [], "missing": True}
+    sheet = json.loads(p.read_text("utf-8"))
+    sheet["md"] = str((p.with_name("confirm_sheet.md")).relative_to(d)) if p.with_name("confirm_sheet.md").exists() else ""
+    return sheet
+
+
+def confirm_save(slug: str, answers: dict) -> dict:
+    d = talent_dir(slug)
+    p = confirm_path(d)
+    if not p:
+        raise ValueError("No confirm sheet yet – build the card first (creator mode).")
+    sheet = json.loads(p.read_text("utf-8"))
+    for it in sheet.get("items", []):
+        a = answers.get(it["id"])
+        if a is None:
+            continue
+        if not a or not a.get("action"):
+            it["answer"] = None
+        else:
+            it["answer"] = {"action": str(a["action"])[:20], "value": str(a.get("value") or "")[:2000]}
+    p.write_text(json.dumps(sheet, ensure_ascii=False, indent=1), "utf-8")
+    from .confirm import render_md
+
+    p.with_name("confirm_sheet.md").write_text(render_md(sheet), "utf-8")
+    return confirm_get(slug)
 
 
 # ═══════════════════════════════════════════════════════════ jobs
@@ -563,6 +824,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"talents": list_talents(), "root": str(TALENT_ROOT), "env": env_defaults()})
             elif u.path.startswith("/api/talent/"):
                 self._json(talent_info(unquote(u.path.split("/", 3)[3])))
+            elif u.path.startswith("/api/editor/"):
+                self._json(editor_info(unquote(u.path.split("/")[3])))
+            elif u.path.startswith("/api/confirm/"):
+                self._json(confirm_get(unquote(u.path.split("/")[3])))
             elif u.path.startswith("/api/job/"):
                 job = JOBS.get(u.path.split("/")[3])
                 if not job:
@@ -628,6 +893,38 @@ class Handler(BaseHTTPRequestHandler):
                 job = Job(slug, argv, env, notes)
                 JOBS[job.id] = job
                 return self._json({"job": job.id, "slug": slug})
+            if u.path.startswith("/api/editor/"):
+                parts = u.path.split("/")
+                if len(parts) != 5:
+                    return self._err("not found", 404)
+                body = json.loads(self._body() or b"{}")
+                try:
+                    return self._json(editor_action(unquote(parts[3]), parts[4], body))
+                except ValueError as e:
+                    return self._json({"errors": [str(e)]}, 400)
+                except Exception as e:  # noqa: BLE001 – AI/provider errors: show them, keep the server up
+                    return self._json({"errors": [f"The AI step failed: {str(e)[:400]}"]}, 502)
+            if u.path.startswith("/api/confirm/") and u.path.endswith("/apply"):
+                slug = unquote(u.path.split("/")[3])
+                body = json.loads(self._body() or b"{}")
+                if body.get("answers"):
+                    confirm_save(slug, body["answers"])
+                form = body.get("form") or {}
+                errors = validate(form)
+                if errors:
+                    return self._json({"errors": errors}, 400)
+                if any(j.slug == slug and j.status == "running" for j in JOBS.values()):
+                    return self._json({"errors": ["A run for this creator is already in progress."]}, 409)
+                sheet = confirm_path(talent_dir(slug))
+                if not sheet:
+                    return self._json({"errors": ["No confirm sheet yet – build the card first."]}, 400)
+                save_talent_inputs(slug, form)
+                argv, env, notes = build_command(slug, form, rebuild=True)
+                argv += ["--confirm-sheet", str(sheet)]
+                notes.append("Applying the confirm-sheet answers, then rewriting the card from the corrected research.")
+                job = Job(slug, argv, env, notes)
+                JOBS[job.id] = job
+                return self._json({"job": job.id, "slug": slug})
             if u.path.startswith("/api/job/") and u.path.endswith("/cancel"):
                 job = JOBS.get(u.path.split("/")[3])
                 if job:
@@ -642,6 +939,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._err("cross-origin request refused", 403)
         u = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
+        if u.path.startswith("/api/confirm/"):
+            try:
+                body = json.loads(self._body() or b"{}")
+                return self._json(confirm_save(unquote(u.path.split("/")[3]), body.get("answers") or {}))
+            except ValueError as e:
+                return self._json({"errors": [str(e)]}, 400)
         if u.path != "/api/upload":
             return self._err("not found", 404)
         try:
