@@ -109,7 +109,7 @@ The app reads its settings from a file called `.env` in the project folder.
 
 | Use | Suggested setup |
 | --- | --- |
-| **Adult creator cards (`--nsfw`)** | **Featherless.ai** (example below), **OpenRouter** with a model that permits adult content, or a capable **local model**. Mainstream models (OpenAI, Anthropic, Google) often refuse adult extraction and writing. |
+| **Adult creator cards (`--nsfw`)** | **Featherless.ai** (example below), **NanoGPT** or **OpenRouter** with a model that permits adult content, or a capable **local model**. Mainstream models (OpenAI, Anthropic, Google) often refuse adult extraction and writing. |
 | SFW cards (public figures, fictional characters) | Any good model: OpenAI, Anthropic, OpenRouter or DeepSeek. |
 | Free / private | A local model in Ollama or LM Studio. Use 14B parameters or more for decent cards. |
 
@@ -163,6 +163,61 @@ Featherless notes:
   `python -m persona_forge --from-dossier output/Ivy_Wren/dossier.json --model huihui-ai/Huihui-Mistral-Small-3.2-24B-Instruct-2506-abliterated`
 - **Images:** Featherless is text-only. `--generate-avatar` needs a separate image service in the `IMAGE_*` settings.
   Everything else (card, lorebook, sprite kit) works without one.
+
+**NanoGPT example (pay per use; one key for everything):**
+
+NanoGPT uses the same API format as OpenAI. One NanoGPT key can run four parts of the app: the AI model,
+portraits (`--generate-avatar`), audio/video transcription and web search.
+
+```ini
+LLM_BASE_URL=https://api.nano-gpt.com/api/v1
+LLM_API_KEY=your-nanogpt-key
+LLM_MODEL=<a model id – easiest picked with "Browse models" in the web UI>
+IMAGE_BASE_URL=https://api.nano-gpt.com/api/v1
+TRANSCRIBE_BASE_URL=https://api.nano-gpt.com/api/v1
+TRANSCRIBE_MODEL=Whisper-Large-V3
+SEARCH_PROVIDER=nanogpt
+```
+
+Leave the image and transcription keys empty: steps that point at NanoGPT reuse the AI model's NanoGPT key.
+If your AI model runs somewhere else and you only want NanoGPT for some steps, put the key in `NANOGPT_API_KEY`.
+
+In the web UI (section 5), pick **NanoGPT** under **Provider**, paste the key, and press **Browse models**:
+
+- The list shows each model's price per million tokens (input / output), its context size, and tags such as
+  “thinks” (a reasoning model) and “JSON output”. You can filter by name and sort by price or context.
+- Each row has a button for each step: **Card writing** (dossier, card, lorebook, onboarding), **Page reading**
+  (the many small page-reading requests, where a cheaper model is fine) and **Editing** (the editing assistant
+  and the refined copy).
+- **Only my subscription's models** shows just the models your NanoGPT subscription includes.
+- **Browse** next to *Image model* lists NanoGPT's image models, with a tag showing whether each allows NSFW images.
+- **Browse** next to *Transcription model* lists the provider's transcription models. NanoGPT shows the Whisper
+  models named in its documentation.
+- **Use NanoGPT for portraits, transcription & search too** fills in those steps with one click.
+
+**Model per step.** Under the provider, a summary shows which model each step will run: card writing, page
+reading, editing assistant, portrait images and transcription. Change any of them at any time, for example to try
+a different image model, and the summary updates. Empty boxes fall back to the card-writing model (page reading,
+editing) or the provider's usual model (transcription).
+
+**NanoGPT always gets a model.** NanoGPT runs whatever model a request names and has no default, so the app never
+sends it a request without one:
+
+- The run won't start until a card-writing model is chosen (the page says so before anything is sent).
+- With **Generate a portrait** on, it won't start until an image model is chosen. If the image model is missing
+  on the command line, the portrait is skipped with a message and the card is still built.
+- The editing assistant refuses to call NanoGPT until it has a model.
+- Transcription uses NanoGPT's `Whisper-Large-V3` unless you pick another.
+- Web search always names its search engine (*7 · Advanced → NanoGPT search engine*: Linkup standard by default;
+  Linkup deep, Tavily, Exa, Brave, Kagi, Perplexity or Valyu).
+- The only call without a model is the model list behind **Browse**, which is how a model is chosen.
+
+Other providers keep the old defaults when a box is empty (gpt-4o-mini, gpt-image-1, whisper-1).
+
+For 18+ cards, pick a model that allows adult content (if a model refuses, the run stops with “The model … refused this step”;
+switch models). A model tagged “thinks” spends tokens reasoning first. Leave **Model “thinking”** on Auto, or
+raise **Max reply tokens**. NanoGPT web search costs about $0.006 per search. A deep run makes a few dozen
+searches, so roughly $0.10–0.50. Pick it under *7 · Advanced → Search engine*. Auto never picks it on its own.
 
 **Local (Ollama) example:**
 
@@ -903,6 +958,7 @@ Run `python -m persona_forge --help` for the full list. These are the main optio
 | `--confirm-sheet F` | Apply the answers in a `confirm_sheet.json` to the dossier before writing the card. |
 | `--no-confirm-sheet` | Don't write the confirm sheet after research. |
 | `--no-onboarding` | Don't add Marinara fan onboarding questions. |
+| `--nanogpt-search E` | NanoGPT's search engine: `linkup` (default), `linkup-deep`, `tavily`, `exa`, `brave`, `kagi`, `perplexity`, `valyu`. |
 | `--card-budget N` | Also write `<Name>_refined.png`, condensed to N permanent tokens. The raw card is unchanged. |
 | `--fit-budget CARD` | Make a refined copy of an existing card (with `--card-budget`). Nothing else runs. |
 

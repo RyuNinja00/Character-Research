@@ -91,10 +91,17 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--no-web", action="store_true", help="Skip web search; use Wikipedia/Wikiquote/--url only")
     g.add_argument("--max-pages", type=int, default=12, help="Max web pages to read (default 12)")
     g.add_argument("--search-provider", default=env("SEARCH_PROVIDER", "auto"),
-                   choices=["auto", "ddg", "searxng", "brave", "tavily", "none"])
+                   choices=["auto", "ddg", "searxng", "brave", "tavily", "nanogpt", "none"],
+                   help="nanogpt = NanoGPT's web search (about $0.006 per search; uses NANOGPT_API_KEY, or the AI "
+                        "model's key when the AI model is on NanoGPT)")
     g.add_argument("--searxng-url", default=env("SEARXNG_URL", ""))
     g.add_argument("--brave-key", default=env("BRAVE_API_KEY", ""))
     g.add_argument("--tavily-key", default=env("TAVILY_API_KEY", ""))
+    g.add_argument("--nanogpt-key", default=env("NANOGPT_API_KEY", ""))
+    g.add_argument("--nanogpt-search", default=env("NANOGPT_SEARCH", "linkup"),
+                   choices=["linkup", "linkup-deep", "tavily", "exa", "kagi", "perplexity", "valyu", "brave"],
+                   help="Search engine NanoGPT's web search uses (default linkup, about $0.006 per search; "
+                        "linkup-deep about $0.06; others are billed at NanoGPT's price for that engine)")
     g.add_argument("--yes", "-y", action="store_true", help="Never prompt; take the top Wikipedia match")
     g.add_argument("--handle", action="append", default=[],
                    help="Creator username used on platforms (repeatable). Link-hub usernames and stage-name slugs "
@@ -135,14 +142,15 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--transcribe-base-url", default=env("TRANSCRIBE_BASE_URL", ""),
                    help="OpenAI-compatible transcription API, e.g. https://api.openai.com/v1 or https://api.groq.com/openai/v1")
     g.add_argument("--transcribe-api-key", default=env("TRANSCRIBE_API_KEY", ""))
-    g.add_argument("--transcribe-model", default=env("TRANSCRIBE_MODEL", "whisper-1"),
+    g.add_argument("--transcribe-model", default=env("TRANSCRIBE_MODEL", ""),
                    help="API model, e.g. whisper-1, gpt-4o-transcribe, whisper-large-v3 (Groq)")
     g.add_argument("--audio-language", default=env("AUDIO_LANGUAGE", ""), help="Spoken language code, e.g. en (empty = detect)")
 
     g = p.add_argument_group("LLM (any OpenAI-compatible endpoint)")
     g.add_argument("--base-url", default=env("LLM_BASE_URL", "https://api.openai.com/v1"))
     g.add_argument("--api-key", default=env("LLM_API_KEY", env("OPENAI_API_KEY", "")))
-    g.add_argument("--model", default=env("LLM_MODEL", "gpt-4o-mini"), help="Model for dossier, card and lorebook")
+    g.add_argument("--model", default=env("LLM_MODEL", ""),
+                   help="Model for dossier, card and lorebook (required on NanoGPT; elsewhere empty = gpt-4o-mini)")
     g.add_argument("--extract-model", default=env("LLM_EXTRACT_MODEL", ""),
                    help="Cheaper/faster model for per-page fact extraction (defaults to --model)")
     g.add_argument("--max-tokens", type=int, default=int(env("LLM_MAX_TOKENS", "8192")))
@@ -206,7 +214,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Generate a SFW illustrated portrait avatar from the text description (no photos used)")
     g.add_argument("--image-base-url", default=env("IMAGE_BASE_URL", env("LLM_BASE_URL", "https://api.openai.com/v1")))
     g.add_argument("--image-api-key", default=env("IMAGE_API_KEY", env("LLM_API_KEY", env("OPENAI_API_KEY", ""))))
-    g.add_argument("--image-model", default=env("IMAGE_MODEL", "gpt-image-1"))
+    g.add_argument("--image-model", default=env("IMAGE_MODEL", ""),
+                   help="Model for --generate-avatar (required on NanoGPT; elsewhere empty = gpt-image-1)")
     g.add_argument("--avatar-style", default="digital painting, portrait, head and shoulders, soft studio lighting",
                    help="Art style for --generate-avatar")
     g.add_argument("--references", action="append", default=[],
@@ -723,6 +732,48 @@ def save_research(out: Path, slug: str, opts, dossier: dict, facts, source_urls:
     )
 
 
+def resolve_models(args) -> None:
+    """Every request names its model. NanoGPT runs whatever model the request names and has no default, so a step
+    that points at NanoGPT without a chosen model never calls it: the run stops (AI model) or the step is skipped
+    with a message (portrait). Other providers keep the old defaults."""
+    from .providers import PROVIDERS, provider_for
+
+    if not args.model:
+        if provider_for(args.base_url) == "nanogpt":
+            raise SystemExit("NanoGPT needs to know which model to run: choose one (web UI: 5 · AI model → Browse "
+                             "models; command line: --model; .env: LLM_MODEL). Nothing was sent to NanoGPT.")
+        args.model = "gpt-4o-mini"
+    if getattr(args, "extract_model", "") is None:
+        args.extract_model = ""
+    if not getattr(args, "image_model", "x"):
+        args.image_model = "" if provider_for(args.image_base_url) == "nanogpt" else "gpt-image-1"
+    if not getattr(args, "transcribe_model", "x"):
+        p = PROVIDERS.get(provider_for(getattr(args, "transcribe_base_url", "")))
+        args.transcribe_model = p.transcribe_model if p and p.transcribe_model else "whisper-1"
+    if not getattr(args, "nanogpt_search", ""):
+        args.nanogpt_search = "linkup"
+
+
+def share_nanogpt_key(args) -> None:
+    """One NanoGPT key covers the AI model, portraits, transcription and web search: when a step points at NanoGPT
+    and has no key of its own, it uses NANOGPT_API_KEY or the AI model's key (if the AI model is on NanoGPT)."""
+    from .providers import provider_for
+
+    nk = getattr(args, "nanogpt_key", "") or (args.api_key if provider_for(args.base_url) == "nanogpt" else "")
+    if not nk:
+        return
+    args.nanogpt_key = nk
+    if provider_for(args.base_url) == "nanogpt" and not args.api_key:
+        args.api_key = nk
+    if provider_for(getattr(args, "transcribe_base_url", "")) == "nanogpt" and not args.transcribe_api_key:
+        args.transcribe_api_key = nk
+    if provider_for(getattr(args, "image_base_url", "")) == "nanogpt" and (
+            not args.image_api_key or provider_for(args.base_url) != "nanogpt"):
+        # the image key defaults to the AI model's key, which is wrong when only the images use NanoGPT
+        if not os.environ.get("IMAGE_API_KEY"):
+            args.image_api_key = nk
+
+
 # ─────────────────────────────────────────────────────────────── card token budget
 def make_refined_copy(llm, card: dict, budget: int, out: Path, stem: str, image: bytes | None, *, nsfw: bool,
                       spec: str = "v2", raw_name: str = "") -> Path:
@@ -764,6 +815,8 @@ def main(argv: list[str] | None = None) -> int:
     load_dotenv(Path.cwd() / ".env")
     parser = build_parser()
     args = parser.parse_args(argv)
+    share_nanogpt_key(args)
+    resolve_models(args)
     set_verbose(args.verbose)
     if not args.name and not args.from_dossier and not args.refine:
         parser.print_help()
@@ -849,6 +902,8 @@ def main(argv: list[str] | None = None) -> int:
             searxng_url=args.searxng_url,
             brave_key=args.brave_key,
             tavily_key=args.tavily_key,
+            nanogpt_key=args.nanogpt_key or (args.api_key if "nano-gpt" in args.base_url.lower() else ""),
+            nanogpt_search=args.nanogpt_search,
             confirm_adult=(args.nsfw or args.confirm_adult) and not args.no_age_click,
             browser_mode=args.browser,
         )
@@ -983,8 +1038,11 @@ def main(argv: list[str] | None = None) -> int:
     elif args.avatar_from_reference and references:
         avatar = load_avatar(str(references[0]))
     elif args.generate_avatar and image_appearance:
-        log("→ Generating avatar from the text description…")
+        log(f"→ Generating avatar from the text description (image model {args.image_model or '–'})…")
         try:
+            if not args.image_model:
+                raise RuntimeError("no image model chosen – NanoGPT needs one for every request "
+                                   "(web UI: Image model → Browse; command line: --image-model)")
             avatar = generate_avatar(image_appearance, base_url=args.image_base_url, api_key=args.image_api_key,
                                      model=args.image_model, style=args.avatar_style)
             (out / "avatar_generated.png").write_bytes(avatar)

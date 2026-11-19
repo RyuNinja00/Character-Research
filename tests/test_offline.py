@@ -1033,7 +1033,7 @@ def main():
               "effective AI setup printed at the start of the run")
         os.environ["LLM_MAX_TOKENS"] = ""
         os.environ["LLM_MODEL"] = ""
-        check(cli.build_parser().parse_args(["x"]).model == "gpt-4o-mini", "empty .env values count as not set")
+        _a = cli.build_parser().parse_args(["x"]); cli.resolve_models(_a); check(_a.model == "gpt-4o-mini", "empty .env values count as not set")
         del os.environ["LLM_MAX_TOKENS"], os.environ["LLM_MODEL"]
 
         # ── Page reader: browser headers, retry, no failure caching, no sub-pages on third-party sites

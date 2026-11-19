@@ -239,6 +239,25 @@ Run `python -m persona_forge --help` for every option. The most useful ones:
 Page downloads and LLM replies are cached in `.persona_forge_cache/` for a week, so a re-run is cheap.
 Turn this off with `--no-cache`.
 
+## AI providers and the model picker
+
+Any OpenAI-compatible service works. The web UI's **Provider** dropdown fills in the address for NanoGPT,
+OpenRouter, Featherless, OpenAI or a local Ollama. **Browse models** lists the provider's models with prices per
+million tokens, context size and capability tags, and lets you pick the card-writing model and the cheaper
+page-reading model.
+
+**NanoGPT** (`https://api.nano-gpt.com/api/v1`): one key covers the AI model, portraits (`IMAGE_BASE_URL`),
+transcription (`TRANSCRIBE_BASE_URL`, `TRANSCRIBE_MODEL=Whisper-Large-V3`) and web search
+(`--search-provider nanogpt`, about $0.006 per search). Steps that point at NanoGPT reuse the AI model's key, or
+`NANOGPT_API_KEY` if the AI model runs elsewhere. The picker can show only the models included in a NanoGPT
+subscription, and lists image models with their NSFW flag.
+
+**A model for every step.** Card writing, page reading, the editing assistant, portraits and transcription each
+have their own model box with a **Browse** button. A "Model per step" summary shows what each step will run.
+NanoGPT has no default model, so the app never calls it without one: runs are blocked until a card-writing model
+is chosen (and an image model when a portrait is requested), and web searches always name their engine
+(`--nanogpt-search`, default `linkup`).
+
 ## Public feeds and refining
 
 - **`--feed "reddit: u/name"`** (also `bluesky:`, `mastodon:`, `youtube:`, `tumblr:`, `rss:`, `substack:`,
@@ -317,4 +336,5 @@ portrayal built from public sources. Check the facts before you share a card of 
 python -m tests.test_offline   # fake LLM + fake Marinara, no network needed
 python -m tests.test_features  # clip catalogues, socials, confirm sheet, onboarding, budget, editing assistant
 python -m tests.test_webui
+python -m tests.test_providers # provider presets, model picker, NanoGPT search and key sharing
 ```
