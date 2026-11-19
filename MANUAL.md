@@ -109,7 +109,7 @@ The app reads its settings from a file called `.env` in the project folder.
 
 | Use | Suggested setup |
 | --- | --- |
-| **Adult creator cards (`--nsfw`)** | **Featherless.ai** (example below), **OpenRouter** with a model that permits adult content, or a capable **local model**. Mainstream models (OpenAI, Anthropic, Google) often refuse adult extraction and writing. |
+| **Adult creator cards (`--nsfw`)** | **Featherless.ai** (example below), **NanoGPT** or **OpenRouter** with a model that permits adult content, or a capable **local model**. Mainstream models (OpenAI, Anthropic, Google) often refuse adult extraction and writing. |
 | SFW cards (public figures, fictional characters) | Any good model: OpenAI, Anthropic, OpenRouter or DeepSeek. |
 | Free / private | A local model in Ollama or LM Studio. Use 14B parameters or more for decent cards. |
 
@@ -163,6 +163,38 @@ Featherless notes:
   `python -m persona_forge --from-dossier output/Ivy_Wren/dossier.json --model huihui-ai/Huihui-Mistral-Small-3.2-24B-Instruct-2506-abliterated`
 - **Images:** Featherless is text-only. `--generate-avatar` needs a separate image service in the `IMAGE_*` settings.
   Everything else (card, lorebook, sprite kit) works without one.
+
+**NanoGPT example (pay per use; one key for everything):**
+
+NanoGPT uses the same API format as OpenAI. One NanoGPT key can run four parts of the app: the AI model,
+portraits (`--generate-avatar`), audio/video transcription and web search.
+
+```ini
+LLM_BASE_URL=https://api.nano-gpt.com/api/v1
+LLM_API_KEY=your-nanogpt-key
+LLM_MODEL=<a model id – easiest picked with "Browse models" in the web UI>
+IMAGE_BASE_URL=https://api.nano-gpt.com/api/v1
+TRANSCRIBE_BASE_URL=https://api.nano-gpt.com/api/v1
+TRANSCRIBE_MODEL=Whisper-Large-V3
+SEARCH_PROVIDER=nanogpt
+```
+
+Leave the image and transcription keys empty: steps that point at NanoGPT reuse the AI model's NanoGPT key.
+If your AI model runs somewhere else and you only want NanoGPT for some steps, put the key in `NANOGPT_API_KEY`.
+
+In the web UI (section 5), pick **NanoGPT** under **Provider**, paste the key, and press **Browse models**:
+
+- The list shows each model's price per million tokens (input / output), its context size, and tags such as
+  “thinks” (a reasoning model) and “JSON output”. You can filter by name and sort by price or context.
+- **Use** sets the model that writes the card. **For page reading** sets the cheaper page-reading model.
+- **Only my subscription's models** shows just the models your NanoGPT subscription includes.
+- **Browse** next to *Image model* lists NanoGPT's image models, with a tag showing whether each allows NSFW images.
+- **Use NanoGPT for portraits, transcription & search too** fills in those steps with one click.
+
+For 18+ cards, pick a model that allows adult content (if a model refuses, the run stops with “The model … refused this step”;
+switch models). A model tagged “thinks” spends tokens reasoning first. Leave **Model “thinking”** on Auto, or
+raise **Max reply tokens**. NanoGPT web search costs about $0.006 per search. A deep run makes a few dozen
+searches, so roughly $0.10–0.50. Pick it under *7 · Advanced → Search engine*. Auto never picks it on its own.
 
 **Local (Ollama) example:**
 

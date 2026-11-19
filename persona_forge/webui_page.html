@@ -120,6 +120,24 @@
   pre.log .e { color: #ff8a80; } pre.log .cmd { color: #c5a3ff; } pre.log .dim { color: #8a837a; }
   pre.log.problems-only > span:not(.w):not(.e) { display: none; }
   pre.log.problems-only { white-space: pre-line; }
+  /* provider + model picker */
+  .provbar { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin: 8px 0 2px; }
+  .provbar .field { margin: 0; min-width: 220px; }
+  .withbtn { display: flex; gap: 6px; } .withbtn input { flex: 1; min-width: 0; }
+  .picker { border: 1px solid var(--line); border-radius: 8px; background: var(--soft); padding: 10px; margin: 6px 0 12px; }
+  .picker .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+  .picker .bar input[type=text] { flex: 1; min-width: 180px; width: auto; }
+  .picker .bar select { width: auto; }
+  .picker .list { max-height: 380px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+  .picker table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .picker th { position: sticky; top: 0; background: var(--panel); text-align: left; font-weight: 600; font-size: 12px;
+               color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  .picker td { padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .picker td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .picker .mid { font-size: 11.5px; color: var(--muted); word-break: break-all; }
+  .picker .mbadge { display: inline-block; font-size: 10.5px; border: 1px solid var(--line); border-radius: 99px; padding: 0 6px; margin: 2px 3px 0 0; color: var(--muted); }
+  .picker .acts { white-space: nowrap; } .picker .acts button { font-size: 12px; padding: 3px 8px; }
+  .picker .note { font-size: 12.5px; color: var(--muted); margin-top: 6px; }
   /* confirm sheet */
   .cq { border-top: 1px solid var(--line); padding: 10px 0; }
   .cq .sec { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 14px 0 2px; }
@@ -449,6 +467,14 @@
     <h2>5 · AI model</h2>
     <div class="body">
       <div class="hint" style="margin:6px 0 4px">Grey italic text in a box is only an example and is never used. Empty boxes use your <code>.env</code> values, shown in green under each box.</div>
+      <div class="provbar">
+        <div class="field">
+          <label for="provider">Provider</label>
+          <select id="provider" name="provider"><option value="">Other / typed in below</option></select>
+        </div>
+        <button type="button" class="btn" id="btnNanoAll" style="display:none">Use NanoGPT for portraits, transcription &amp; search too</button>
+      </div>
+      <div class="hint" id="providerNote" style="margin:2px 0 6px"></div>
       <div class="grid2">
         <div class="field">
           <label for="base_url">API base URL</label>
@@ -462,7 +488,8 @@
         </div>
         <div class="field">
           <label for="model">Model</label>
-          <input type="text" id="model" name="model" placeholder="e.g. huihui-ai/Huihui-Qwen3.5-27B-abliterated">
+          <div class="withbtn"><input type="text" id="model" name="model" placeholder="e.g. huihui-ai/Huihui-Qwen3.5-27B-abliterated">
+          <button type="button" class="btn" id="btnBrowse" title="List this provider's models with prices">Browse models</button></div>
           <div class="envnote" id="env-model"></div><div class="hint">Writes the dossier, card and lorebook. For 18+ cards, pick one that allows adult content.</div>
         </div>
         <div class="field">
@@ -470,6 +497,21 @@
           <input type="text" id="extract_model" name="extract_model" placeholder="e.g. TrevorJS/gemma-4-26B-A4B-it-uncensored">
           <div class="envnote" id="env-extract_model"></div><div class="hint">A cheaper or faster model <b>from the same provider</b> for reading pages. Empty = same as Model.</div>
         </div>
+      </div>
+      <div class="picker" id="picker" hidden>
+        <div class="bar">
+          <b id="pickerTitle">Models</b>
+          <input type="text" id="pickerFilter" placeholder="Filter by name, e.g. qwen, llama, abliterated, uncensored">
+          <select id="pickerSort">
+            <option value="name">Sort: name</option><option value="cheap">Sort: cheapest output</option>
+            <option value="context">Sort: biggest context</option>
+          </select>
+          <label class="muted" id="pickerSubWrap" style="font-size:13px"><input type="checkbox" id="pickerSub"> Only my subscription's models</label>
+          <button type="button" class="tab" id="pickerClose">Close</button>
+        </div>
+        <div class="list"><table><thead><tr><th>Model</th><th class="num">In $/M</th><th class="num">Out $/M</th><th class="num">Context</th><th></th></tr></thead>
+          <tbody id="pickerRows"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody></table></div>
+        <div class="note" id="pickerNote"></div>
       </div>
       <div class="grid3">
         <div class="field">
@@ -512,8 +554,9 @@
         </div>
         <div class="field">
           <label for="image_model">Image model</label>
-          <input type="text" id="image_model" name="image_model" placeholder="e.g. gpt-image-1">
-          <div class="envnote" id="env-image_model"></div><div class="hint">Any /images/generations model.</div>
+          <div class="withbtn"><input type="text" id="image_model" name="image_model" placeholder="e.g. gpt-image-1">
+          <button type="button" class="btn" id="btnBrowseImg" title="List NanoGPT's image models">Browse</button></div>
+          <div class="envnote" id="env-image_model"></div><div class="hint">Any /images/generations model. Browse works for NanoGPT.</div>
         </div>
       </div>
       <div class="grid3">
@@ -565,8 +608,9 @@
         </div>
         <div class="field">
           <label for="transcribe_model">Transcription model</label>
-          <input type="text" id="transcribe_model" name="transcribe_model" placeholder="e.g. whisper-large-v3 (Groq) or whisper-1 (OpenAI)">
-          <div class="hint">Empty = whisper-1.</div>
+          <input type="text" id="transcribe_model" name="transcribe_model" list="transcribeModels" placeholder="e.g. whisper-large-v3 (Groq), whisper-1 (OpenAI), Whisper-Large-V3 (NanoGPT)">
+          <datalist id="transcribeModels"></datalist>
+          <div class="hint">Empty = whisper-1. On NanoGPT the key can stay empty: the AI model's NanoGPT key is used.</div>
         </div>
       </div>
       <div class="check"><input type="checkbox" id="save_env" name="save_env"><div>
@@ -731,8 +775,15 @@
             <option value="">Default (auto)</option><option value="ddg">DuckDuckGo (free)</option>
             <option value="tavily">Tavily (key in .env)</option><option value="brave">Brave (key in .env)</option>
             <option value="searxng">SearXNG (URL in .env)</option>
+            <option value="nanogpt">NanoGPT web search (~$0.006 per search)</option>
           </select>
-          <div class="hint">Auto uses a paid key from .env if there is one.</div>
+          <div class="hint">Auto uses a paid key from .env if there is one (never NanoGPT: pick it here).</div>
+        </div>
+        <div class="field">
+          <label for="nanogpt_api_key">NanoGPT key for search <span class="muted">(optional)</span></label>
+          <input type="password" id="nanogpt_api_key" name="nanogpt_api_key" placeholder="only if the AI model isn't on NanoGPT">
+          <div class="envnote" id="env-nanogpt_api_key"></div>
+          <div class="hint">Empty = the AI model's key when the AI model is on NanoGPT, or NANOGPT_API_KEY in .env.</div>
         </div>
         <div class="field">
           <label for="clip_pages">Clip listing pages per store</label>
@@ -912,6 +963,7 @@ function applyInfo(info) {
   loadSheet(); loadEditor();
 }
 
+let env = null;
 async function loadTalents(select) {
   const j = await api("/api/talents");
   $("#rootInfo").textContent = "Creator folders: " + j.root;
@@ -930,13 +982,15 @@ async function loadTalents(select) {
   note("transcriber", e.local_whisper ? "Local Whisper is installed ✓" : (e.transcribe_base_url ? "Local Whisper not installed: Auto will use the API in .env." : "Local Whisper not installed and no API set: audio would be skipped."), !e.local_whisper && !e.transcribe_base_url);
   note("transcribe_base_url", e.transcribe_base_url ? "If empty, uses your .env: " + e.transcribe_base_url : "");
   note("transcribe_api_key", e.has_transcribe_key ? "If empty, uses the key saved in your .env." : "");
+  note("nanogpt_api_key", e.has_nanogpt_key ? "If empty, uses NANOGPT_API_KEY from your .env." : "");
+  env = e; if (providers.length) syncProviderFromUrl();
 }
 $("#talentPicker").addEventListener("change", async e => {
   if (!e.target.value) { form.reset(); slug = ""; applyMode(); $("#brief").value = $("#limits").value = $("#urls").value = "";
     ["references","avatar","sprites","fullbody","sources","audio","card"].forEach(k => $("#files-" + k).innerHTML = ""); renderOutputs([]);
     $("#folder").textContent = ""; $("#btnRebuild").disabled = true; renderSheet(null); renderEditor(null); return; }
   const info = await api("/api/talent/" + e.target.value);
-  fill({ name: info.settings.name, ...info.settings }); applyInfo(info); toast("Loaded " + (info.settings.name || info.slug));
+  fill({ name: info.settings.name, ...info.settings }); applyInfo(info); syncProviderFromUrl(); toast("Loaded " + (info.settings.name || info.slug));
 });
 
 async function ensureTalent() {
@@ -1257,7 +1311,94 @@ $("#edBudget").addEventListener("input", () => renderEditor(editor));
 $("#btnChatSize").addEventListener("click", () => { const c = $("#chat"); c.classList.toggle("tall"); $("#btnChatSize").textContent = c.classList.contains("tall") ? "Smaller chat" : "Bigger chat"; });
 $("#btnChatClear").addEventListener("click", () => { if (confirm("Clear the chat? Saved card versions are kept.")) edAction("clear"); });
 
-applyMode(); loadTalents();
+// ─────────────────────────────── provider presets + model picker
+let providers = [];
+const provOf = url => { url = (url || "").toLowerCase(); if (url.includes("nano-gpt")) return "nanogpt";
+  const p = providers.find(p => url && url.includes(p.base_url.split("//")[1].split("/")[0])); return p ? p.key : ""; };
+function showProviderNote() {
+  const p = providers.find(p => p.key === $("#provider").value);
+  $("#providerNote").textContent = p ? [p.note, p.key_hint && ("API key: " + p.key_hint)].filter(Boolean).join(" · ") : "";
+  $("#btnNanoAll").style.display = p && p.key === "nanogpt" ? "" : "none";
+}
+async function loadProviders() {
+  try { providers = (await api("/api/providers")).providers; } catch (e) { return; }
+  const sel = $("#provider");
+  providers.forEach(p => sel.add(new Option(p.label, p.key)));
+  const dl = $("#transcribeModels");
+  [...new Set(providers.flatMap(p => p.transcribe_models))].forEach(m => dl.append(el("option", { value: m })));
+  syncProviderFromUrl();
+}
+function syncProviderFromUrl() {
+  const url = $("#base_url").value || (env && env.base_url) || "";
+  $("#provider").value = provOf(url) || ""; showProviderNote();
+}
+$("#provider").addEventListener("change", () => {
+  const p = providers.find(p => p.key === $("#provider").value);
+  if (p) { $("#base_url").value = p.base_url; if (p.key === "nanogpt" && !$("#workers").value) $("#workers").placeholder = "default 4"; }
+  showProviderNote(); $("#picker").hidden = true;
+});
+$("#base_url").addEventListener("change", syncProviderFromUrl);
+$("#btnNanoAll").addEventListener("click", () => {
+  const p = providers.find(p => p.key === "nanogpt"); if (!p) return;
+  $("#image_base_url").value = p.image_base_url; $("#transcribe_base_url").value = p.transcribe_base_url;
+  if (!$("#transcribe_model").value) $("#transcribe_model").value = p.transcribe_model;
+  if ($("#transcriber") && $("#transcriber").value === "local") $("#transcriber").value = "";
+  $("#search_provider").value = "nanogpt";
+  toast("Portraits, transcription and web search now use NanoGPT (same key)");
+});
+
+let pickerKind = "text", pickerModels = [];
+async function openPicker(kind) {
+  pickerKind = kind; const pk = $("#picker"); pk.hidden = false;
+  $("#pickerTitle").textContent = kind === "image" ? "Image models" : "AI models";
+  const base = kind === "image" ? ($("#image_base_url").value || (env && env.image_base_url) || $("#base_url").value) : $("#base_url").value;
+  $("#pickerSubWrap").style.display = kind === "text" && provOf(base || (env && env.base_url)) === "nanogpt" ? "" : "none";
+  $("#pickerRows").innerHTML = '<tr><td colspan="5" class="muted">Loading the model list…</td></tr>'; $("#pickerNote").textContent = "";
+  pk.scrollIntoView({ block: "nearest" });
+  try {
+    const r = await jpost("/api/models", { kind, base_url: base, subscription: $("#pickerSub").checked,
+      api_key: kind === "image" ? $("#image_api_key").value : $("#api_key").value, llm_api_key: $("#api_key").value });
+    pickerModels = r.models || []; $("#pickerNote").textContent = (r.note || "") + ` ${pickerModels.length} models.`;
+    renderPicker();
+  } catch (e) { $("#pickerRows").innerHTML = ""; $("#pickerRows").append(el("tr", {}, el("td", { colspan: "5", class: "warnline", text: (e.errors || [e.message]).join(" ") }))); }
+}
+const money = v => v == null ? "–" : v === 0 ? "free" : v < 0.1 ? v.toFixed(3) : v < 10 ? v.toFixed(2) : v.toFixed(1);
+const ctx = v => !v ? "–" : v >= 1000 ? Math.round(v / 1000) + "K" : String(v);
+function renderPicker() {
+  const q = $("#pickerFilter").value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  let rows = pickerModels.filter(m => q.every(w => (m.name + " " + m.id + " " + m.description).toLowerCase().includes(w)));
+  const sort = $("#pickerSort").value;
+  if (sort === "cheap") rows.sort((a, b) => (a.price_out ?? 1e9) - (b.price_out ?? 1e9));
+  if (sort === "context") rows.sort((a, b) => (b.context || 0) - (a.context || 0));
+  const body = $("#pickerRows"); body.innerHTML = "";
+  if (!rows.length) { body.append(el("tr", {}, el("td", { colspan: "5", class: "muted", text: "No models match." }))); return; }
+  const cur = pickerKind === "image" ? $("#image_model").value : $("#model").value;
+  rows.slice(0, 400).forEach(m => {
+    const badges = [m.reasoning && "thinks", m.json && "JSON output", m.vision && "vision",
+                    m.nsfw === true && "NSFW allowed", m.nsfw === false && "SFW only"].filter(Boolean);
+    const acts = el("td", { class: "acts" });
+    if (pickerKind === "image") acts.append(el("button", { type: "button", class: "btn" + (cur === m.id ? " primary" : ""), text: "Use",
+      onclick: () => { $("#image_model").value = m.id; toast("Image model: " + m.name); renderPicker(); } }));
+    else acts.append(
+      el("button", { type: "button", class: "btn" + (cur === m.id ? " primary" : ""), text: "Use",
+        title: "Writes the dossier, card and lorebook", onclick: () => { $("#model").value = m.id; toast("Model: " + m.name); renderPicker(); } }),
+      " ", el("button", { type: "button", class: "btn", text: "For page reading", title: "The cheaper model that reads pages",
+        onclick: () => { $("#extract_model").value = m.id; toast("Page-reading model: " + m.name); } }));
+    body.append(el("tr", {},
+      el("td", {}, el("div", { text: m.name }), m.name !== m.id ? el("div", { class: "mid", text: m.id }) : null,
+         badges.length ? el("div", {}, badges.map(b => el("span", { class: "mbadge", text: b }))) : null),
+      el("td", { class: "num", text: money(m.price_in) }), el("td", { class: "num", text: money(m.price_out) }),
+      el("td", { class: "num", text: ctx(m.context) }), acts));
+  });
+}
+$("#btnBrowse").addEventListener("click", () => openPicker("text"));
+$("#btnBrowseImg").addEventListener("click", () => openPicker("image"));
+$("#pickerFilter").addEventListener("input", renderPicker);
+$("#pickerSort").addEventListener("change", renderPicker);
+$("#pickerSub").addEventListener("change", () => openPicker(pickerKind));
+$("#pickerClose").addEventListener("click", () => { $("#picker").hidden = true; });
+
+applyMode(); loadTalents(); loadProviders();
 </script>
 </body>
 </html>

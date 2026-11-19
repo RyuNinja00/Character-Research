@@ -91,10 +91,13 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--no-web", action="store_true", help="Skip web search; use Wikipedia/Wikiquote/--url only")
     g.add_argument("--max-pages", type=int, default=12, help="Max web pages to read (default 12)")
     g.add_argument("--search-provider", default=env("SEARCH_PROVIDER", "auto"),
-                   choices=["auto", "ddg", "searxng", "brave", "tavily", "none"])
+                   choices=["auto", "ddg", "searxng", "brave", "tavily", "nanogpt", "none"],
+                   help="nanogpt = NanoGPT's web search (about $0.006 per search; uses NANOGPT_API_KEY, or the AI "
+                        "model's key when the AI model is on NanoGPT)")
     g.add_argument("--searxng-url", default=env("SEARXNG_URL", ""))
     g.add_argument("--brave-key", default=env("BRAVE_API_KEY", ""))
     g.add_argument("--tavily-key", default=env("TAVILY_API_KEY", ""))
+    g.add_argument("--nanogpt-key", default=env("NANOGPT_API_KEY", ""))
     g.add_argument("--yes", "-y", action="store_true", help="Never prompt; take the top Wikipedia match")
     g.add_argument("--handle", action="append", default=[],
                    help="Creator username used on platforms (repeatable). Link-hub usernames and stage-name slugs "
@@ -723,6 +726,26 @@ def save_research(out: Path, slug: str, opts, dossier: dict, facts, source_urls:
     )
 
 
+def share_nanogpt_key(args) -> None:
+    """One NanoGPT key covers the AI model, portraits, transcription and web search: when a step points at NanoGPT
+    and has no key of its own, it uses NANOGPT_API_KEY or the AI model's key (if the AI model is on NanoGPT)."""
+    from .providers import provider_for
+
+    nk = getattr(args, "nanogpt_key", "") or (args.api_key if provider_for(args.base_url) == "nanogpt" else "")
+    if not nk:
+        return
+    args.nanogpt_key = nk
+    if provider_for(args.base_url) == "nanogpt" and not args.api_key:
+        args.api_key = nk
+    if provider_for(getattr(args, "transcribe_base_url", "")) == "nanogpt" and not args.transcribe_api_key:
+        args.transcribe_api_key = nk
+    if provider_for(getattr(args, "image_base_url", "")) == "nanogpt" and (
+            not args.image_api_key or provider_for(args.base_url) != "nanogpt"):
+        # the image key defaults to the AI model's key, which is wrong when only the images use NanoGPT
+        if not os.environ.get("IMAGE_API_KEY"):
+            args.image_api_key = nk
+
+
 # ─────────────────────────────────────────────────────────────── card token budget
 def make_refined_copy(llm, card: dict, budget: int, out: Path, stem: str, image: bytes | None, *, nsfw: bool,
                       spec: str = "v2", raw_name: str = "") -> Path:
@@ -764,6 +787,7 @@ def main(argv: list[str] | None = None) -> int:
     load_dotenv(Path.cwd() / ".env")
     parser = build_parser()
     args = parser.parse_args(argv)
+    share_nanogpt_key(args)
     set_verbose(args.verbose)
     if not args.name and not args.from_dossier and not args.refine:
         parser.print_help()
@@ -849,6 +873,7 @@ def main(argv: list[str] | None = None) -> int:
             searxng_url=args.searxng_url,
             brave_key=args.brave_key,
             tavily_key=args.tavily_key,
+            nanogpt_key=args.nanogpt_key or (args.api_key if "nano-gpt" in args.base_url.lower() else ""),
             confirm_adult=(args.nsfw or args.confirm_adult) and not args.no_age_click,
             browser_mode=args.browser,
         )

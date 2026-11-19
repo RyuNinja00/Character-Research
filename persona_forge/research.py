@@ -200,6 +200,23 @@ class WikiCandidate:
     description: str = ""
 
 
+def parse_search_results(data, n: int) -> list[tuple[str, str]]:
+    """[(url, title)] from a search API reply whose result fields vary (url/link/href, title/name)."""
+    items = data.get("data", data.get("results", [])) if isinstance(data, dict) else data
+    if isinstance(items, dict):
+        items = items.get("results") or items.get("sources") or items.get("data") or []
+    out: list[tuple[str, str]] = []
+    for it in items if isinstance(items, list) else []:
+        if not isinstance(it, dict):
+            continue
+        url = it.get("url") or it.get("link") or it.get("href") or it.get("source") or ""
+        if isinstance(url, str) and url.startswith("http"):
+            out.append((url, str(it.get("title") or it.get("name") or "")))
+        if len(out) >= n:
+            break
+    return out
+
+
 class Researcher:
     def __init__(
         self,
@@ -209,6 +226,7 @@ class Researcher:
         searxng_url: str = "",
         brave_key: str = "",
         tavily_key: str = "",
+        nanogpt_key: str = "",
         timeout: int = 20,
         confirm_adult: bool = False,
         browser_mode: str = "auto",          # off | auto (when needed) | always | visible (when needed, window shown)
@@ -221,6 +239,7 @@ class Researcher:
         self.searxng_url = searxng_url
         self.brave_key = brave_key
         self.tavily_key = tavily_key
+        self.nanogpt_key = nanogpt_key
         self.timeout = timeout
         self.confirm_adult = confirm_adult
         self.browser_mode = browser_mode
@@ -492,6 +511,20 @@ class Researcher:
         )
         resp.raise_for_status()
         return [(r["url"], r.get("title", "")) for r in resp.json().get("results", [])[:n]]
+
+    def _search_nanogpt(self, query: str, n: int) -> list[tuple[str, str]]:
+        """NanoGPT's web search API (POST /api/web, Linkup standard depth, about $0.006 per search)."""
+        from .providers import NANOGPT_WEB_SEARCH
+
+        if not self.nanogpt_key:
+            raise ValueError("NanoGPT search needs a NanoGPT API key (NANOGPT_API_KEY, or the AI model's key when the "
+                             "AI model is on NanoGPT)")
+        resp = self.http.post(NANOGPT_WEB_SEARCH, json={"query": query, "provider": "linkup", "depth": "standard",
+                                                        "outputType": "searchResults"},
+                              headers={"Authorization": f"Bearer {self.nanogpt_key}", "Content-Type": "application/json"},
+                              timeout=max(self.timeout, 40))
+        resp.raise_for_status()
+        return parse_search_results(resp.json(), n)
 
     def _search_none(self, query: str, n: int) -> list[tuple[str, str]]:
         return []

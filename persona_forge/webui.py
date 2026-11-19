@@ -57,7 +57,7 @@ UPLOAD_KINDS = {  # kind → (subfolder, allowed extensions)
 }
 UPLOAD_KINDS["card"] = ("cards", {".png", ".json"})
 UPLOAD_LIMITS = {"audio": 1024 * 1024 * 1024}  # per kind; everything else uses MAX_UPLOAD
-SECRET_FIELDS = {"api_key", "image_api_key", "marinara_pass", "transcribe_api_key", "reddit_client_secret"}
+SECRET_FIELDS = {"api_key", "image_api_key", "marinara_pass", "transcribe_api_key", "reddit_client_secret", "nanogpt_api_key"}
 MAX_UPLOAD = 25 * 1024 * 1024
 
 FEEDS_HEADER = ("# Public feeds for Persona Forge – one per line, e.g.  reddit: u/name   bluesky: name.bsky.social   "
@@ -350,7 +350,7 @@ def build_command(slug: str, form: dict, rebuild: bool = False, refine: str = ""
                                ("style", "--style", {"roleplay", "chat"}), ("pov", "--pov", {"third", "first"}),
                                ("spec", "--spec", {"v2", "v3"}), ("json_mode", "--json-mode", {"auto", "on", "off"}),
                                ("search_provider", "--search-provider",
-                                {"auto", "ddg", "searxng", "brave", "tavily", "none"})):
+                                {"auto", "ddg", "searxng", "brave", "tavily", "nanogpt", "none"})):
         v = _s(form, key)
         if v in choices:
             a += [flag, v]
@@ -411,7 +411,8 @@ def build_command(slug: str, form: dict, rebuild: bool = False, refine: str = ""
 
     # secrets travel by environment variable, never on the command line or in settings.json
     for key, var in (("api_key", "LLM_API_KEY"), ("image_api_key", "IMAGE_API_KEY"), ("marinara_pass", "MARINARA_PASS"),
-                     ("transcribe_api_key", "TRANSCRIBE_API_KEY"), ("reddit_client_secret", "REDDIT_CLIENT_SECRET")):
+                     ("transcribe_api_key", "TRANSCRIBE_API_KEY"), ("reddit_client_secret", "REDDIT_CLIENT_SECRET"),
+                     ("nanogpt_api_key", "NANOGPT_API_KEY")):
         if _s(form, key):
             env[var] = _s(form, key)
     return a, env, notes
@@ -425,7 +426,8 @@ def save_env(form: dict) -> list[str]:
                "marinara_user": "MARINARA_USER", "marinara_pass": "MARINARA_PASS",
                "transcribe_base_url": "TRANSCRIBE_BASE_URL", "transcribe_api_key": "TRANSCRIBE_API_KEY",
                "transcribe_model": "TRANSCRIBE_MODEL", "whisper_model": "WHISPER_MODEL", "whisper_device": "WHISPER_DEVICE",
-               "reddit_client_id": "REDDIT_CLIENT_ID", "reddit_client_secret": "REDDIT_CLIENT_SECRET"}
+               "reddit_client_id": "REDDIT_CLIENT_ID", "reddit_client_secret": "REDDIT_CLIENT_SECRET",
+               "nanogpt_api_key": "NANOGPT_API_KEY"}
     updates = {var: _s(form, key) for key, var in mapping.items() if _s(form, key)}
     if not updates:
         return []
@@ -463,8 +465,33 @@ def env_defaults() -> dict:
         "image_base_url": vals.get("IMAGE_BASE_URL", ""), "max_tokens": vals.get("LLM_MAX_TOKENS", ""),
         "has_api_key": bool(vals.get("LLM_API_KEY")), "has_image_key": bool(vals.get("IMAGE_API_KEY")),
         "transcribe_base_url": vals.get("TRANSCRIBE_BASE_URL", ""), "has_transcribe_key": bool(vals.get("TRANSCRIBE_API_KEY")),
-        "local_whisper": _local_whisper(),
+        "local_whisper": _local_whisper(), "transcribe_model": vals.get("TRANSCRIBE_MODEL", ""),
+        "has_nanogpt_key": bool(vals.get("NANOGPT_API_KEY")), "search_provider": vals.get("SEARCH_PROVIDER", ""),
     }
+
+
+def models_for(body: dict) -> dict:
+    """The model list for the picker. The key comes from the box, else from .env (never sent back)."""
+    from .cli import load_dotenv
+    from .providers import list_models, provider_for
+
+    load_dotenv(ROOT / ".env")
+    kind = "image" if body.get("kind") == "image" else "text"
+    base = _s(body, "base_url") or (os.environ.get("IMAGE_BASE_URL" if kind == "image" else "LLM_BASE_URL") or "")
+    if kind == "image" and not base:
+        base = os.environ.get("LLM_BASE_URL") or ""
+    if not base:
+        raise ValueError("Pick a provider or fill in the API base URL first.")
+    key = _s(body, "api_key")
+    if not key:
+        env_base = (os.environ.get("IMAGE_BASE_URL" if kind == "image" else "LLM_BASE_URL") or "").rstrip("/")
+        same = env_base == base.rstrip("/") or provider_for(env_base) == provider_for(base) != ""
+        key = (os.environ.get("IMAGE_API_KEY" if kind == "image" else "LLM_API_KEY") or "") if same else ""
+        if not key and kind == "image":
+            key = _s(body, "llm_api_key") or os.environ.get("LLM_API_KEY", "")
+        if not key and provider_for(base) == "nanogpt":
+            key = os.environ.get("NANOGPT_API_KEY", "")
+    return list_models(base, key, kind=kind, subscription_only=bool(body.get("subscription")))
 
 
 # ═══════════════════════════════════════════════════════════ editing assistant, confirm sheet, budget
@@ -544,8 +571,12 @@ def llm_from_form(form: dict):
         max_tokens = int(g("max_tokens", "LLM_MAX_TOKENS", "8192"))
     except ValueError:
         max_tokens = 8192
-    return LLMClient(LLMConfig(g("base_url", "LLM_BASE_URL", "https://api.openai.com/v1"),
-                               g("api_key", "LLM_API_KEY") or (os.environ.get("OPENAI_API_KEY") or ""),
+    from .providers import provider_for
+
+    base = g("base_url", "LLM_BASE_URL", "https://api.openai.com/v1")
+    key = g("api_key", "LLM_API_KEY") or (os.environ.get("NANOGPT_API_KEY", "") if provider_for(base) == "nanogpt"
+                                          else "") or (os.environ.get("OPENAI_API_KEY") or "")
+    return LLMClient(LLMConfig(base, key,
                                g("model", "LLM_MODEL", "gpt-4o-mini"), max_tokens=max_tokens,
                                json_mode=g("json_mode", "LLM_JSON_MODE", "auto"), thinking=g("thinking", "LLM_THINKING", "auto")))
 
@@ -820,6 +851,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+            elif u.path == "/api/providers":
+                from .providers import presets
+
+                self._json({"providers": presets()})
             elif u.path == "/api/talents":
                 self._json({"talents": list_talents(), "root": str(TALENT_ROOT), "env": env_defaults()})
             elif u.path.startswith("/api/talent/"):
@@ -893,6 +928,14 @@ class Handler(BaseHTTPRequestHandler):
                 job = Job(slug, argv, env, notes)
                 JOBS[job.id] = job
                 return self._json({"job": job.id, "slug": slug})
+            if u.path == "/api/models":
+                body = json.loads(self._body() or b"{}")
+                try:
+                    return self._json(models_for(body))
+                except (ValueError, PermissionError) as e:
+                    return self._json({"errors": [str(e)]}, 400)
+                except Exception as e:  # noqa: BLE001 – network / provider errors
+                    return self._json({"errors": [f"Couldn't load the model list: {str(e)[:300]}"]}, 502)
             if u.path.startswith("/api/editor/"):
                 parts = u.path.split("/")
                 if len(parts) != 5:
