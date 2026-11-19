@@ -138,6 +138,11 @@
   .picker .mbadge { display: inline-block; font-size: 10.5px; border: 1px solid var(--line); border-radius: 99px; padding: 0 6px; margin: 2px 3px 0 0; color: var(--muted); }
   .picker .acts { white-space: nowrap; } .picker .acts button { font-size: 12px; padding: 3px 8px; }
   .picker .note { font-size: 12.5px; color: var(--muted); margin-top: 6px; }
+  .stepmodels { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; font-size: 12.5px; margin: 4px 0 10px;
+                padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--soft); }
+  .stepmodels:empty { display: none; }
+  .stepmodels .k { color: var(--muted); } .stepmodels .v { word-break: break-all; }
+  .stepmodels .miss { color: var(--bad); font-weight: 600; }
   /* confirm sheet */
   .cq { border-top: 1px solid var(--line); padding: 10px 0; }
   .cq .sec { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 14px 0 2px; }
@@ -475,6 +480,7 @@
         <button type="button" class="btn" id="btnNanoAll" style="display:none">Use NanoGPT for portraits, transcription &amp; search too</button>
       </div>
       <div class="hint" id="providerNote" style="margin:2px 0 6px"></div>
+      <div class="stepmodels" id="stepModels"></div>
       <div class="grid2">
         <div class="field">
           <label for="base_url">API base URL</label>
@@ -556,7 +562,7 @@
           <label for="image_model">Image model</label>
           <div class="withbtn"><input type="text" id="image_model" name="image_model" placeholder="e.g. gpt-image-1">
           <button type="button" class="btn" id="btnBrowseImg" title="List NanoGPT's image models">Browse</button></div>
-          <div class="envnote" id="env-image_model"></div><div class="hint">Any /images/generations model. Browse works for NanoGPT.</div>
+          <div class="envnote" id="env-image_model"></div><div class="hint">Any /images/generations model. Browse lists the provider's image models (NanoGPT shows which allow NSFW). Required on NanoGPT.</div>
         </div>
       </div>
       <div class="grid3">
@@ -608,9 +614,10 @@
         </div>
         <div class="field">
           <label for="transcribe_model">Transcription model</label>
-          <input type="text" id="transcribe_model" name="transcribe_model" list="transcribeModels" placeholder="e.g. whisper-large-v3 (Groq), whisper-1 (OpenAI), Whisper-Large-V3 (NanoGPT)">
+          <div class="withbtn"><input type="text" id="transcribe_model" name="transcribe_model" list="transcribeModels" placeholder="e.g. whisper-large-v3 (Groq), whisper-1 (OpenAI), Whisper-Large-V3 (NanoGPT)">
+          <button type="button" class="btn" id="btnBrowseTr" title="List this provider's transcription models">Browse</button></div>
           <datalist id="transcribeModels"></datalist>
-          <div class="hint">Empty = whisper-1. On NanoGPT the key can stay empty: the AI model's NanoGPT key is used.</div>
+          <div class="hint">Empty = the provider's usual model (NanoGPT: Whisper-Large-V3, otherwise whisper-1). On NanoGPT the key can stay empty: the AI model's NanoGPT key is used.</div>
         </div>
       </div>
       <div class="check"><input type="checkbox" id="save_env" name="save_env"><div>
@@ -703,6 +710,12 @@
           <div class="hint">Newest first. Pick an older version to go back to it.</div>
         </div>
         <div class="field">
+          <label for="editor_model">Editing assistant model</label>
+          <div class="withbtn"><input type="text" id="editor_model" name="editor_model" placeholder="empty = the card-writing model">
+          <button type="button" class="btn" id="btnBrowseEd">Browse</button></div>
+          <div class="hint">Used for suggestions, edits and the refined copy. Try a different one any time.</div>
+        </div>
+        <div class="field">
           <label>Size</label>
           <div id="edTokens" class="hint" style="margin-top:0">–</div>
           <div class="meter" id="edMeter"><div style="width:0"></div></div>
@@ -778,6 +791,16 @@
             <option value="nanogpt">NanoGPT web search (~$0.006 per search)</option>
           </select>
           <div class="hint">Auto uses a paid key from .env if there is one (never NanoGPT: pick it here).</div>
+        </div>
+        <div class="field">
+          <label for="nanogpt_search">NanoGPT search engine</label>
+          <select id="nanogpt_search" name="nanogpt_search">
+            <option value="">Linkup standard (default, ~$0.006/search)</option>
+            <option value="linkup-deep">Linkup deep (~$0.06/search, more thorough)</option>
+            <option value="tavily">Tavily</option><option value="exa">Exa</option><option value="brave">Brave</option>
+            <option value="kagi">Kagi</option><option value="perplexity">Perplexity</option><option value="valyu">Valyu</option>
+          </select>
+          <div class="hint">Only when Search engine is NanoGPT. Every search names this engine; other engines are billed at NanoGPT's price for them.</div>
         </div>
         <div class="field">
           <label for="nanogpt_api_key">NanoGPT key for search <span class="muted">(optional)</span></label>
@@ -983,14 +1006,14 @@ async function loadTalents(select) {
   note("transcribe_base_url", e.transcribe_base_url ? "If empty, uses your .env: " + e.transcribe_base_url : "");
   note("transcribe_api_key", e.has_transcribe_key ? "If empty, uses the key saved in your .env." : "");
   note("nanogpt_api_key", e.has_nanogpt_key ? "If empty, uses NANOGPT_API_KEY from your .env." : "");
-  env = e; if (providers.length) syncProviderFromUrl();
+  env = e; if (providers.length) syncProviderFromUrl(); refreshSteps();
 }
 $("#talentPicker").addEventListener("change", async e => {
   if (!e.target.value) { form.reset(); slug = ""; applyMode(); $("#brief").value = $("#limits").value = $("#urls").value = "";
     ["references","avatar","sprites","fullbody","sources","audio","card"].forEach(k => $("#files-" + k).innerHTML = ""); renderOutputs([]);
     $("#folder").textContent = ""; $("#btnRebuild").disabled = true; renderSheet(null); renderEditor(null); return; }
   const info = await api("/api/talent/" + e.target.value);
-  fill({ name: info.settings.name, ...info.settings }); applyInfo(info); syncProviderFromUrl(); toast("Loaded " + (info.settings.name || info.slug));
+  fill({ name: info.settings.name, ...info.settings }); applyInfo(info); syncProviderFromUrl(); refreshSteps(); toast("Loaded " + (info.settings.name || info.slug));
 });
 
 async function ensureTalent() {
@@ -1335,7 +1358,7 @@ function syncProviderFromUrl() {
 $("#provider").addEventListener("change", () => {
   const p = providers.find(p => p.key === $("#provider").value);
   if (p) { $("#base_url").value = p.base_url; if (p.key === "nanogpt" && !$("#workers").value) $("#workers").placeholder = "default 4"; }
-  showProviderNote(); $("#picker").hidden = true;
+  showProviderNote(); $("#picker").hidden = true; refreshSteps();
 });
 $("#base_url").addEventListener("change", syncProviderFromUrl);
 $("#btnNanoAll").addEventListener("click", () => {
@@ -1344,26 +1367,33 @@ $("#btnNanoAll").addEventListener("click", () => {
   if (!$("#transcribe_model").value) $("#transcribe_model").value = p.transcribe_model;
   if ($("#transcriber") && $("#transcriber").value === "local") $("#transcriber").value = "";
   $("#search_provider").value = "nanogpt";
-  toast("Portraits, transcription and web search now use NanoGPT (same key)");
+  toast("Portraits, transcription and web search now use NanoGPT (same key) – pick an image model with Browse");
+  refreshSteps();
 });
 
 let pickerKind = "text", pickerModels = [];
-async function openPicker(kind) {
+const PICK = {
+  text: { title: "AI models", base: () => $("#base_url").value || (env && env.base_url) || "", key: () => $("#api_key").value },
+  image: { title: "Image models", base: () => $("#image_base_url").value || (env && env.image_base_url) || $("#base_url").value || (env && env.base_url) || "", key: () => $("#image_api_key").value },
+  transcribe: { title: "Transcription models", base: () => $("#transcribe_base_url").value || (env && env.transcribe_base_url) || "", key: () => $("#transcribe_api_key").value },
+};
+async function openPicker(kind, anchor) {
   pickerKind = kind; const pk = $("#picker"); pk.hidden = false;
-  $("#pickerTitle").textContent = kind === "image" ? "Image models" : "AI models";
-  const base = kind === "image" ? ($("#image_base_url").value || (env && env.image_base_url) || $("#base_url").value) : $("#base_url").value;
-  $("#pickerSubWrap").style.display = kind === "text" && provOf(base || (env && env.base_url)) === "nanogpt" ? "" : "none";
+  const box = anchor && anchor.closest(".grid2, .grid3, .edtop"); if (box) box.after(pk);   // open next to the box it fills
+  const k = PICK[kind]; const base = k.base();
+  $("#pickerTitle").textContent = k.title;
+  $("#pickerSubWrap").style.display = kind === "text" && provOf(base) === "nanogpt" ? "" : "none";
   $("#pickerRows").innerHTML = '<tr><td colspan="5" class="muted">Loading the model list…</td></tr>'; $("#pickerNote").textContent = "";
   pk.scrollIntoView({ block: "nearest" });
   try {
-    const r = await jpost("/api/models", { kind, base_url: base, subscription: $("#pickerSub").checked,
-      api_key: kind === "image" ? $("#image_api_key").value : $("#api_key").value, llm_api_key: $("#api_key").value });
+    const r = await jpost("/api/models", { kind, base_url: base, subscription: $("#pickerSub").checked, api_key: k.key(), llm_api_key: $("#api_key").value });
     pickerModels = r.models || []; $("#pickerNote").textContent = (r.note || "") + ` ${pickerModels.length} models.`;
     renderPicker();
   } catch (e) { $("#pickerRows").innerHTML = ""; $("#pickerRows").append(el("tr", {}, el("td", { colspan: "5", class: "warnline", text: (e.errors || [e.message]).join(" ") }))); }
 }
 const money = v => v == null ? "–" : v === 0 ? "free" : v < 0.1 ? v.toFixed(3) : v < 10 ? v.toFixed(2) : v.toFixed(1);
 const ctx = v => !v ? "–" : v >= 1000 ? Math.round(v / 1000) + "K" : String(v);
+function setModel(id, field, label, name) { $(id).value = field; toast(label + ": " + name); renderPicker(); refreshSteps(); if (id === "#editor_model") renderEditor(editor); }
 function renderPicker() {
   const q = $("#pickerFilter").value.trim().toLowerCase().split(/\s+/).filter(Boolean);
   let rows = pickerModels.filter(m => q.every(w => (m.name + " " + m.id + " " + m.description).toLowerCase().includes(w)));
@@ -1372,18 +1402,17 @@ function renderPicker() {
   if (sort === "context") rows.sort((a, b) => (b.context || 0) - (a.context || 0));
   const body = $("#pickerRows"); body.innerHTML = "";
   if (!rows.length) { body.append(el("tr", {}, el("td", { colspan: "5", class: "muted", text: "No models match." }))); return; }
-  const cur = pickerKind === "image" ? $("#image_model").value : $("#model").value;
   rows.slice(0, 400).forEach(m => {
     const badges = [m.reasoning && "thinks", m.json && "JSON output", m.vision && "vision",
                     m.nsfw === true && "NSFW allowed", m.nsfw === false && "SFW only"].filter(Boolean);
     const acts = el("td", { class: "acts" });
-    if (pickerKind === "image") acts.append(el("button", { type: "button", class: "btn" + (cur === m.id ? " primary" : ""), text: "Use",
-      onclick: () => { $("#image_model").value = m.id; toast("Image model: " + m.name); renderPicker(); } }));
-    else acts.append(
-      el("button", { type: "button", class: "btn" + (cur === m.id ? " primary" : ""), text: "Use",
-        title: "Writes the dossier, card and lorebook", onclick: () => { $("#model").value = m.id; toast("Model: " + m.name); renderPicker(); } }),
-      " ", el("button", { type: "button", class: "btn", text: "For page reading", title: "The cheaper model that reads pages",
-        onclick: () => { $("#extract_model").value = m.id; toast("Page-reading model: " + m.name); } }));
+    const btn = (label, id, title, stepLabel) => el("button", { type: "button", class: "btn" + ($(id).value === m.id ? " primary" : ""),
+      text: label, title, onclick: () => setModel(id, m.id, stepLabel, m.name) });
+    if (pickerKind === "image") acts.append(btn("Use", "#image_model", "Portrait images", "Image model"));
+    else if (pickerKind === "transcribe") acts.append(btn("Use", "#transcribe_model", "Audio and video transcription", "Transcription model"));
+    else acts.append(btn("Card writing", "#model", "Writes the dossier, card, lorebook, onboarding", "Card-writing model"), " ",
+                     btn("Page reading", "#extract_model", "Reads the pages (a cheaper model is fine)", "Page-reading model"), " ",
+                     btn("Editing", "#editor_model", "The editing assistant and the refined copy", "Editing model"));
     body.append(el("tr", {},
       el("td", {}, el("div", { text: m.name }), m.name !== m.id ? el("div", { class: "mid", text: m.id }) : null,
          badges.length ? el("div", {}, badges.map(b => el("span", { class: "mbadge", text: b }))) : null),
@@ -1391,8 +1420,32 @@ function renderPicker() {
       el("td", { class: "num", text: ctx(m.context) }), acts));
   });
 }
-$("#btnBrowse").addEventListener("click", () => openPicker("text"));
-$("#btnBrowseImg").addEventListener("click", () => openPicker("image"));
+// which model each step will use
+let stepTimer = null;
+function refreshSteps() { clearTimeout(stepTimer); stepTimer = setTimeout(async () => {
+  let st; try { st = await jpost("/api/step-models", collect()); } catch (e) { return; }
+  const box = $("#stepModels"); box.innerHTML = "";
+  const rows = [["Card writing", st.card], ["Page reading", st.extract, "same as card writing"], ["Editing assistant", st.editor, "same as card writing"],
+                ["Portrait images", st.image, "", () => $("#generate_avatar") && $("#generate_avatar").checked], ["Transcription", st.transcribe, "", null]];
+  box.append(el("div", { class: "k", text: "Model per step" }), el("div", { class: "v muted", text: "Change any of them with the Browse buttons." }));
+  rows.forEach(([label, s, sameNote, used]) => {
+    const host = s.base ? s.base.replace(/^https?:\/\//, "").split("/")[0] : "";
+    if (label === "Transcription" && !s.base) {
+      box.append(el("div", { class: "k", text: label }), el("div", { class: "v", text: "local Whisper on this PC (no transcription API set)" }));
+      return;
+    }
+    const missing = !s.model;
+    const txt = missing ? (s.nanogpt ? "not chosen – NanoGPT needs one" + (label === "Portrait images" ? " (only if you generate a portrait)" : "") : "not set")
+                        : s.model + (host ? "  ·  " + host : "") + (sameNote && s.model === st.card.model && label !== "Card writing" ? "  (" + sameNote + ")" : "");
+    box.append(el("div", { class: "k", text: label }), el("div", { class: "v" + (missing && s.nanogpt && (label !== "Portrait images" || (used && used())) ? " miss" : ""), text: txt }));
+  });
+}, 250); }
+["#base_url", "#model", "#extract_model", "#editor_model", "#image_base_url", "#image_model", "#transcribe_base_url", "#transcribe_model",
+ "#provider", "#generate_avatar"].forEach(id => { const e = $(id); if (e) { e.addEventListener("input", refreshSteps); e.addEventListener("change", refreshSteps); } });
+$("#btnBrowseTr").addEventListener("click", e => openPicker("transcribe", e.target));
+$("#btnBrowseEd").addEventListener("click", e => openPicker("text", e.target));
+$("#btnBrowse").addEventListener("click", e => openPicker("text", e.target));
+$("#btnBrowseImg").addEventListener("click", e => openPicker("image", e.target));
 $("#pickerFilter").addEventListener("input", renderPicker);
 $("#pickerSort").addEventListener("change", renderPicker);
 $("#pickerSub").addEventListener("change", () => openPicker(pickerKind));

@@ -252,6 +252,12 @@ transcription (`TRANSCRIBE_BASE_URL`, `TRANSCRIBE_MODEL=Whisper-Large-V3`) and w
 `NANOGPT_API_KEY` if the AI model runs elsewhere. The picker can show only the models included in a NanoGPT
 subscription, and lists image models with their NSFW flag.
 
+**A model for every step.** Card writing, page reading, the editing assistant, portraits and transcription each
+have their own model box with a **Browse** button. A "Model per step" summary shows what each step will run.
+NanoGPT has no default model, so the app never calls it without one: runs are blocked until a card-writing model
+is chosen (and an image model when a portrait is requested), and web searches always name their engine
+(`--nanogpt-search`, default `linkup`).
+
 ## Public feeds and refining
 
 - **`--feed "reddit: u/name"`** (also `bluesky:`, `mastodon:`, `youtube:`, `tumblr:`, `rss:`, `substack:`,

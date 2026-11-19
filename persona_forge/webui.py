@@ -243,6 +243,49 @@ def validate(form: dict) -> list[str]:
         errors.append("Enter a name (the stage name, person or character).")
     if mode == "talent" and not _s(form, "consent_note"):
         errors.append("Creator mode needs a consent note – who authorised this card and when.")
+    errors += missing_models(form)
+    return errors
+
+
+def _env_value(var: str) -> str:
+    from .cli import load_dotenv
+
+    load_dotenv(ROOT / ".env")
+    return (os.environ.get(var) or "").strip()
+
+
+def step_models(form: dict) -> dict:
+    """Which provider and model each step will use (form box, else .env, else the app's default)."""
+    from .providers import PROVIDERS, provider_for
+
+    base = _s(form, "base_url") or _env_value("LLM_BASE_URL") or "https://api.openai.com/v1"
+    model = _s(form, "model") or _env_value("LLM_MODEL")
+    img_base = _s(form, "image_base_url") or _env_value("IMAGE_BASE_URL") or base
+    img_model = _s(form, "image_model") or _env_value("IMAGE_MODEL")
+    tr_base = _s(form, "transcribe_base_url") or _env_value("TRANSCRIBE_BASE_URL")
+    tr_model = _s(form, "transcribe_model") or _env_value("TRANSCRIBE_MODEL")
+    if not tr_model:
+        p = PROVIDERS.get(provider_for(tr_base))
+        tr_model = p.transcribe_model if p and p.transcribe_model else "whisper-1"
+    nano = provider_for(base) == "nanogpt"
+    return {
+        "card": {"base": base, "model": model or ("" if nano else "gpt-4o-mini"), "nanogpt": nano},
+        "extract": {"base": base, "model": _s(form, "extract_model") or model, "nanogpt": nano},
+        "editor": {"base": base, "model": _s(form, "editor_model") or model, "nanogpt": nano},
+        "image": {"base": img_base, "model": img_model or ("" if provider_for(img_base) == "nanogpt" else "gpt-image-1"),
+                  "nanogpt": provider_for(img_base) == "nanogpt"},
+        "transcribe": {"base": tr_base, "model": tr_model, "nanogpt": provider_for(tr_base) == "nanogpt"},
+    }
+
+
+def missing_models(form: dict) -> list[str]:
+    """NanoGPT runs the model a request names and has no default: catch a missing choice before anything is sent."""
+    st = step_models(form)
+    errors = []
+    if st["card"]["nanogpt"] and not st["card"]["model"]:
+        errors.append("Choose the AI model: NanoGPT needs to know which model to run (5 · AI model → Browse models).")
+    if _flag(form, "generate_avatar") and st["image"]["nanogpt"] and not st["image"]["model"]:
+        errors.append("Choose an image model for the portrait: NanoGPT needs one (5 · AI model → Image model → Browse).")
     return errors
 
 
@@ -349,6 +392,8 @@ def build_command(slug: str, form: dict, rebuild: bool = False, refine: str = ""
                                ("browser", "--browser", {"auto", "off", "always", "visible"}),
                                ("style", "--style", {"roleplay", "chat"}), ("pov", "--pov", {"third", "first"}),
                                ("spec", "--spec", {"v2", "v3"}), ("json_mode", "--json-mode", {"auto", "on", "off"}),
+                               ("nanogpt_search", "--nanogpt-search",
+                                {"linkup", "linkup-deep", "tavily", "exa", "kagi", "perplexity", "valyu", "brave"}),
                                ("search_provider", "--search-provider",
                                 {"auto", "ddg", "searxng", "brave", "tavily", "nanogpt", "none"})):
         v = _s(form, key)
@@ -476,18 +521,20 @@ def models_for(body: dict) -> dict:
     from .providers import list_models, provider_for
 
     load_dotenv(ROOT / ".env")
-    kind = "image" if body.get("kind") == "image" else "text"
-    base = _s(body, "base_url") or (os.environ.get("IMAGE_BASE_URL" if kind == "image" else "LLM_BASE_URL") or "")
-    if kind == "image" and not base:
+    kind = body.get("kind") if body.get("kind") in ("image", "transcribe") else "text"
+    env_var = {"image": "IMAGE_BASE_URL", "transcribe": "TRANSCRIBE_BASE_URL"}.get(kind, "LLM_BASE_URL")
+    key_var = {"image": "IMAGE_API_KEY", "transcribe": "TRANSCRIBE_API_KEY"}.get(kind, "LLM_API_KEY")
+    base = _s(body, "base_url") or (os.environ.get(env_var) or "")
+    if kind != "text" and not base:
         base = os.environ.get("LLM_BASE_URL") or ""
     if not base:
         raise ValueError("Pick a provider or fill in the API base URL first.")
     key = _s(body, "api_key")
     if not key:
-        env_base = (os.environ.get("IMAGE_BASE_URL" if kind == "image" else "LLM_BASE_URL") or "").rstrip("/")
+        env_base = (os.environ.get(env_var) or "").rstrip("/")
         same = env_base == base.rstrip("/") or provider_for(env_base) == provider_for(base) != ""
-        key = (os.environ.get("IMAGE_API_KEY" if kind == "image" else "LLM_API_KEY") or "") if same else ""
-        if not key and kind == "image":
+        key = (os.environ.get(key_var) or "") if same else ""
+        if not key and kind != "text":
             key = _s(body, "llm_api_key") or os.environ.get("LLM_API_KEY", "")
         if not key and provider_for(base) == "nanogpt":
             key = os.environ.get("NANOGPT_API_KEY", "")
@@ -576,8 +623,15 @@ def llm_from_form(form: dict):
     base = g("base_url", "LLM_BASE_URL", "https://api.openai.com/v1")
     key = g("api_key", "LLM_API_KEY") or (os.environ.get("NANOGPT_API_KEY", "") if provider_for(base) == "nanogpt"
                                           else "") or (os.environ.get("OPENAI_API_KEY") or "")
+    # the editing assistant (and the refined copy) can use its own model; empty = the card-writing model
+    model = _s(form, "editor_model") or g("model", "LLM_MODEL")
+    if not model:
+        if provider_for(base) == "nanogpt":
+            raise ValueError("Choose a model first: NanoGPT needs to know which model to run (Editing assistant "
+                             "model → Browse, or 5 · AI model). Nothing was sent.")
+        model = "gpt-4o-mini"
     return LLMClient(LLMConfig(base, key,
-                               g("model", "LLM_MODEL", "gpt-4o-mini"), max_tokens=max_tokens,
+                               model, max_tokens=max_tokens,
                                json_mode=g("json_mode", "LLM_JSON_MODE", "auto"), thinking=g("thinking", "LLM_THINKING", "auto")))
 
 
@@ -928,6 +982,8 @@ class Handler(BaseHTTPRequestHandler):
                 job = Job(slug, argv, env, notes)
                 JOBS[job.id] = job
                 return self._json({"job": job.id, "slug": slug})
+            if u.path == "/api/step-models":
+                return self._json(step_models(json.loads(self._body() or b"{}")))
             if u.path == "/api/models":
                 body = json.loads(self._body() or b"{}")
                 try:

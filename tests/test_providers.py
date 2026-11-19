@@ -198,11 +198,138 @@ def test_webui():
     check('id="provider"' in page and 'id="btnBrowse"' in page and 'value="nanogpt"' in page, "page has the new controls")
 
 
+def test_models_per_step():
+    print("every step names its model; NanoGPT is never called without one")
+    import argparse
+    from persona_forge import cli, webui
+
+    def ns(**kw):
+        d = dict(base_url=providers.NANOGPT_API, model="", extract_model="", image_base_url=providers.NANOGPT_API,
+                 image_model="", transcribe_base_url="", transcribe_model="", nanogpt_search="")
+        d.update(kw)
+        return argparse.Namespace(**d)
+
+    try:
+        cli.resolve_models(ns())
+        check(False, "NanoGPT without a model must stop")
+    except SystemExit as e:
+        check("NanoGPT needs to know which model" in str(e) and "Nothing was sent" in str(e),
+              "NanoGPT + no AI model → the run stops before any request")
+    a = ns(model="acme/creative-70b", transcribe_base_url=providers.NANOGPT_API)
+    cli.resolve_models(a)
+    check(a.image_model == "" and a.transcribe_model == "Whisper-Large-V3" and a.nanogpt_search == "linkup",
+          "NanoGPT: no made-up image model; transcription uses NanoGPT's documented Whisper model; search names its engine")
+    a = ns(base_url="https://api.openai.com/v1", image_base_url="https://api.openai.com/v1",
+           transcribe_base_url="https://api.openai.com/v1")
+    cli.resolve_models(a)
+    check(a.model == "gpt-4o-mini" and a.image_model == "gpt-image-1" and a.transcribe_model == "whisper-1",
+          "other providers keep the old defaults")
+    # the full CLI stops before building any client
+    calls = []
+    orig = cli.LLMClient
+    cli.LLMClient = lambda *a, **k: calls.append(1)
+    try:
+        cli.main(["Ivy", "--base-url", providers.NANOGPT_API, "--api-key", "k", "--model", "", "--no-web", "-y"])
+        check(False, "should have stopped")
+    except SystemExit:
+        check(not calls, "command line: no AI client is created without a model on NanoGPT")
+    finally:
+        cli.LLMClient = orig
+    # portrait step: no image model → skipped with a message, no request
+    import persona_forge.cli as c
+
+    import tempfile
+    from tests.test_offline import FakeLLM as FakeServer, serve
+    from tests.test_features import DOSSIER
+
+    sent = []
+    orig_gen = c.generate_avatar
+    c.generate_avatar = lambda *a, **k: sent.append(k) or b""
+    srv, base = serve(FakeServer)
+    try:
+        with tempfile.TemporaryDirectory() as t:
+            od = Path(t) / "Ivy_Wren"
+            od.mkdir()
+            (od / "dossier.json").write_text(json.dumps(DOSSIER), "utf-8")
+            (Path(t) / "limits.txt").write_text("- no degradation\n", "utf-8")
+            code = cli.main(["--from-dossier", str(od / "dossier.json"), "--base-url", base + "/v1", "--api-key", "k",
+                             "--model", "m", "--generate-avatar", "--image-base-url", providers.NANOGPT_API,
+                             "--image-model", "", "--out", t, "--no-cache", "--talent", "--nsfw", "--consent-note", "x", "--boundaries", str(Path(t) / "limits.txt")])
+            check(code == 0 and not sent and (od / "Ivy_Wren.png").exists(),
+                  "portrait on NanoGPT without an image model: no image request, card still built")
+            code = cli.main(["--from-dossier", str(od / "dossier.json"), "--base-url", base + "/v1", "--api-key", "k",
+                             "--model", "m", "--generate-avatar", "--image-base-url", providers.NANOGPT_API,
+                             "--image-model", "img/flux", "--out", t, "--no-cache", "--talent", "--nsfw",
+                             "--consent-note", "x", "--boundaries", str(Path(t) / "limits.txt")])
+            check(sent and sent[-1]["model"] == "img/flux", "with an image model chosen, the request names it")
+    finally:
+        srv.shutdown()
+        c.generate_avatar = orig_gen
+
+    # web UI: checks before a run, per-step summary, editing model
+    os.environ.pop("LLM_MODEL", None)
+    os.environ.pop("IMAGE_MODEL", None)
+    os.environ.pop("IMAGE_BASE_URL", None)
+    form = {"name": "Ivy", "mode": "public", "base_url": providers.NANOGPT_API}
+    errs = webui.validate(form)
+    check(any("Choose the AI model" in e for e in errs), "web UI: run blocked until a NanoGPT model is chosen")
+    errs = webui.validate(dict(form, model="acme/creative-70b", generate_avatar=True))
+    check(any("image model" in e for e in errs), "web UI: portrait on NanoGPT blocked until an image model is chosen")
+    check(not webui.validate(dict(form, model="acme/creative-70b", generate_avatar=True, image_model="img/flux")),
+          "web UI: nothing blocked once each step has a model")
+    st = webui.step_models(dict(form, model="m1", extract_model="m2", editor_model="m3", image_model="img/flux",
+                                transcribe_base_url=providers.NANOGPT_API))
+    check((st["card"]["model"], st["extract"]["model"], st["editor"]["model"], st["image"]["model"], st["transcribe"]["model"])
+          == ("m1", "m2", "m3", "img/flux", "Whisper-Large-V3"), "per-step summary shows each step's model")
+    st = webui.step_models(dict(form, model="m1"))
+    check(st["extract"]["model"] == "m1" and st["editor"]["model"] == "m1" and st["image"]["model"] == "",
+          "empty boxes fall back to the card-writing model; NanoGPT images get no made-up default")
+    try:
+        webui.llm_from_form({"base_url": providers.NANOGPT_API})
+        check(False, "editor without a model must refuse")
+    except ValueError as e:
+        check("Nothing was sent" in str(e), "editing assistant refuses to call NanoGPT without a model")
+    check(webui.llm_from_form({"base_url": providers.NANOGPT_API, "model": "m1", "editor_model": "m9"}).cfg.model == "m9",
+          "editing assistant uses its own model when one is chosen")
+    argv, _, _ = webui.build_command("ivy", {"name": "Ivy", "mode": "public", "search_provider": "nanogpt",
+                                             "nanogpt_search": "linkup-deep", "search_web": True})
+    check(argv[argv.index("--nanogpt-search") + 1] == "linkup-deep", "NanoGPT search engine passed to the run")
+
+    # search request names its engine
+    r = Researcher(search_provider="nanogpt", nanogpt_key="k", nanogpt_search="exa")
+    body = {}
+    r.http.post = lambda url, json=None, **kw: body.update(json) or Resp({"data": []})
+    r.search("x")
+    check(body.get("provider") == "exa" and "depth" not in body, "search request names the chosen engine")
+    r = Researcher(search_provider="nanogpt", nanogpt_key="k", nanogpt_search="linkup-deep")
+    r.http.post = lambda url, json=None, **kw: body.clear() or body.update(json) or Resp({"data": []})
+    r.search("y")
+    check(body.get("provider") == "linkup" and body.get("depth") == "deep", "Linkup deep sent as provider + depth")
+
+    # picker lists for image and transcription steps
+    orig = providers.requests.get
+    providers.requests.get = lambda url, **kw: Resp({"data": [{"id": "gpt-4o"}, {"id": "gpt-image-1"}, {"id": "dall-e-3"},
+                                                              {"id": "whisper-1"}, {"id": "gpt-4o-transcribe"}]})
+    try:
+        img = [m["id"] for m in providers.list_models("https://api.openai.com/v1", "k", kind="image")["models"]]
+        tr = [m["id"] for m in providers.list_models("https://api.openai.com/v1", "k", kind="transcribe")["models"]]
+        txt = [m["id"] for m in providers.list_models("https://api.openai.com/v1", "k")["models"]]
+        check(img == ["dall-e-3", "gpt-image-1"] and tr == ["gpt-4o-transcribe", "whisper-1"] and txt == ["gpt-4o"],
+              f"each step's picker shows only its kind of model ({img} / {tr} / {txt})")
+        providers.requests.get = lambda url, **kw: Resp(NANO_MODELS)
+        r = providers.list_models(providers.NANOGPT_API, "k", kind="transcribe")
+        check([m["id"] for m in r["models"]] == ["openai-whisper-with-video", "Whisper-Large-V3"],
+              "NanoGPT transcription picker: listed + documented Whisper models")
+    finally:
+        providers.requests.get = orig
+
+
 def main():
     test_presets_and_lists()
     test_web_search()
     test_key_sharing()
     test_webui()
+    test_models_per_step()
     print("\nAll provider checks passed.")
 
 

@@ -227,6 +227,7 @@ class Researcher:
         brave_key: str = "",
         tavily_key: str = "",
         nanogpt_key: str = "",
+        nanogpt_search: str = "linkup",
         timeout: int = 20,
         confirm_adult: bool = False,
         browser_mode: str = "auto",          # off | auto (when needed) | always | visible (when needed, window shown)
@@ -240,6 +241,7 @@ class Researcher:
         self.brave_key = brave_key
         self.tavily_key = tavily_key
         self.nanogpt_key = nanogpt_key
+        self.nanogpt_search = nanogpt_search or "linkup"
         self.timeout = timeout
         self.confirm_adult = confirm_adult
         self.browser_mode = browser_mode
@@ -513,14 +515,19 @@ class Researcher:
         return [(r["url"], r.get("title", "")) for r in resp.json().get("results", [])[:n]]
 
     def _search_nanogpt(self, query: str, n: int) -> list[tuple[str, str]]:
-        """NanoGPT's web search API (POST /api/web, Linkup standard depth, about $0.006 per search)."""
+        """NanoGPT's web search API (POST /api/web). Every request names its search engine (--nanogpt-search,
+        default Linkup standard, about $0.006 per search)."""
         from .providers import NANOGPT_WEB_SEARCH
 
         if not self.nanogpt_key:
             raise ValueError("NanoGPT search needs a NanoGPT API key (NANOGPT_API_KEY, or the AI model's key when the "
                              "AI model is on NanoGPT)")
-        resp = self.http.post(NANOGPT_WEB_SEARCH, json={"query": query, "provider": "linkup", "depth": "standard",
-                                                        "outputType": "searchResults"},
+        engine = self.nanogpt_search
+        body = {"query": query, "provider": "linkup" if engine.startswith("linkup") else engine,
+                "outputType": "searchResults"}
+        if engine.startswith("linkup"):
+            body["depth"] = "deep" if engine == "linkup-deep" else "standard"
+        resp = self.http.post(NANOGPT_WEB_SEARCH, json=body,
                               headers={"Authorization": f"Bearer {self.nanogpt_key}", "Content-Type": "application/json"},
                               timeout=max(self.timeout, 40))
         resp.raise_for_status()

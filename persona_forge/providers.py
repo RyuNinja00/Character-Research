@@ -110,14 +110,11 @@ def normalize_model(m: dict, *, per_token_prices: bool = False) -> dict:
 
 def list_models(base_url: str, api_key: str = "", *, kind: str = "text", subscription_only: bool = False,
                 timeout: int = 30) -> dict:
-    """{"models": [...], "provider": key, "note": str}. kind: "text" or "image"."""
+    """{"models": [...], "provider": key, "note": str}. kind: "text", "image" or "transcribe"."""
     base = (base_url or "").rstrip("/")
     prov = provider_for(base)
     headers = {"Authorization": f"Bearer {api_key}", "x-api-key": api_key} if api_key else {}
-    if kind == "image":
-        if prov != "nanogpt":
-            return {"models": [], "provider": prov,
-                    "note": "This provider has no image-model list; type the model name (e.g. gpt-image-1 for OpenAI)."}
+    if kind == "image" and prov == "nanogpt":
         url = base + "/images/models"
         rows_key, per_token = "data", False
     else:
@@ -133,12 +130,38 @@ def list_models(base_url: str, api_key: str = "", *, kind: str = "text", subscri
     if not isinstance(raw, list):
         raw = data.get("models", []) if isinstance(data, dict) else []
     models = [normalize_model(m, per_token_prices=per_token) for m in raw if isinstance(m, dict) and m.get("id")]
-    if kind == "text":  # embedding / audio / image-only models don't write cards
-        models = [m for m in models if not any(w in (m["category"] + " " + m["id"]).lower()
-                                                for w in ("embedding", "whisper", "tts", "moderation", "rerank"))]
-    models.sort(key=lambda m: m["name"].lower())
     note = ""
-    if prov == "nanogpt":
+
+    def tagged(m: dict, words: tuple[str, ...]) -> bool:
+        return any(w in (m["category"] + " " + m["id"] + " " + m["name"]).lower() for w in words)
+
+    if kind == "text":  # embedding / audio / image-only models don't write cards
+        models = [m for m in models if not tagged(m, ("embedding", "whisper", "tts", "moderation", "rerank",
+                                                      "transcri", "speech", "dall-e", "gpt-image", "image-gen"))]
+    elif kind == "image" and prov != "nanogpt":  # a general /models list: keep the image models
+        models = [m for m in models if tagged(m, ("image", "dall-e", "flux", "stable-diffusion", "sdxl", "imagen",
+                                                  "recraft", "ideogram", "midjourney", "hidream", "seedream"))]
+        if not models:
+            note = "This provider's list shows no image models; type the model name (e.g. gpt-image-1 for OpenAI)."
+    elif kind == "transcribe":
+        models = [m for m in models if tagged(m, ("whisper", "transcri", "speech-to-text", "stt", "asr", "audio"))]
+        preset = PROVIDERS.get(prov)
+        known = {m["id"] for m in models}
+        for mid in (preset.transcribe_models if preset else ()):
+            if mid not in known:
+                models.append({"id": mid, "name": mid, "description": "", "context": None, "max_output": None,
+                               "price_in": None, "price_out": None, "reasoning": False, "json": False,
+                               "vision": False, "nsfw": None, "category": "transcription"})
+        if not models:
+            note = "This provider's list shows no transcription models; type the model name (e.g. whisper-large-v3)."
+        elif preset and not known:
+            note = f"{preset.label} doesn't list its transcription models; these are the ones its documentation names."
+    models.sort(key=lambda m: m["name"].lower())
+    if note:
+        pass
+    elif kind != "text":
+        note = "Pick the model this step should run."
+    elif prov == "nanogpt":
         note = ("Prices are USD per million tokens (input / output)."
                 + (" Showing only models in your subscription." if subscription_only else ""))
     elif not any(m["price_in"] is not None for m in models):
